@@ -26,3 +26,23 @@ def test_different_coin_network_examples():
     assert eth['profit'] == pytest.approx(16.4)
     with pytest.raises(ValueError, match='حداقل'):
         outcome(100, [(100, 5)], [(110, 5)], 0, 0, .1, 2)
+
+
+def test_fee_unknown_and_network_selection():
+    from app.fees import resolve
+    assert resolve([], 'BTC', 'wallex')['status'] == 'fee unknown'
+    rows = [dict(exchange='wallex',coin='BTC',network='BTC',supported=True,withdrawal=None,minimum=None), dict(exchange='nobitex',coin='BTC',network='BTC',supported=True,withdrawal=.1,minimum=.2)]
+    assert resolve(rows, 'BTC', 'wallex')['status'] == 'fee unknown'
+    assert resolve(rows, 'BTC', 'nobitex')['status'] == 'ok'
+    rows[1]['supported'] = False
+    assert resolve(rows, 'BTC', 'wallex')['status'] == 'no common network'
+
+
+def test_ticker_parsing_and_per_coin_failure():
+    from app.scanner import quotes
+    markets = [{'coin':'BTC','quote':'toman','wallex':'BTCTMN'}, {'coin':'ETH','quote':'USDT','wallex':'ETHUSDT'}]
+    w = {'result': {'symbols': {'BTCTMN': {'stats': {'askPrice':'101', 'bidPrice':'100'}}, 'ETHUSDT': {'stats': {}}}}}
+    n = {'stats': {'btc-rls': {'bestSell':'1010', 'bestBuy':'1000'}}}
+    result = quotes(w, n, markets, 123)
+    assert result['BTC','toman']['nobitex_bid'] == 100
+    assert 'error' in result['ETH','USDT']
