@@ -30,7 +30,7 @@ def test_different_coin_network_examples():
 
 def test_fee_unknown_and_network_selection():
     from app.fees import resolve
-    assert resolve([], 'BTC', 'wallex')['status'] == 'fee unknown'
+    assert resolve([], 'BTC', 'wallex')['status'] == 'network unknown'
     rows = [dict(exchange='wallex',coin='BTC',network='BTC',supported=True,withdrawal=None,minimum=None), dict(exchange='nobitex',coin='BTC',network='BTC',supported=True,withdrawal=.1,minimum=.2)]
     assert resolve(rows, 'BTC', 'wallex')['status'] == 'fee unknown'
     assert resolve(rows, 'BTC', 'nobitex')['status'] == 'ok'
@@ -65,7 +65,7 @@ def test_scanner_profit_requires_known_fee(tmp_path):
     s.tickers = {('BTC','USDT'): dict(wallex_ask=100,wallex_bid=99,nobitex_ask=111,nobitex_bid=110,timestamp=now)}
     s.depth = {('BTC','USDT'): {'wallex':Book([(100,10)],[(99,10)],now), 'nobitex':Book([(111,10)],[(110,10)],now), 'timestamp':now}}
     rows = s.rows(Settings())
-    assert all(r['status'] == 'fee unknown' and 'taker' not in r for r in rows)
+    assert all(r['status'] == 'network unknown' and 'taker' not in r for r in rows)
     s.store.replace_fees([dict(exchange=e,coin='BTC',network='BTC',withdrawal=.01,minimum=.1,supported=True) for e in ('wallex','nobitex')])
     assert all(r['status'] == 'ok' and 'taker' in r for r in s.rows(Settings()))
 

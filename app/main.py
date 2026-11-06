@@ -25,9 +25,12 @@ load_dotenv()
 store = Storage(os.getenv('DATABASE_PATH', 'history.sqlite3'))
 
 
-class Fees(BaseModel):
+class TradingFees(BaseModel):
     maker: float = Field(ge=0, lt=100, allow_inf_nan=False)
     taker: float = Field(ge=0, lt=100, allow_inf_nan=False)
+
+
+class Fees(TradingFees):
     withdrawal: float = Field(ge=0, allow_inf_nan=False)
 
 
@@ -36,6 +39,11 @@ class Settings(BaseModel):
     threshold: float = Field(default=.5, ge=0, le=100, allow_inf_nan=False)
     wallex: Fees = Fees(maker=.25, taker=.3, withdrawal=.8)
     nobitex: Fees = Fees(maker=.25, taker=.25, withdrawal=.7)
+    wallex_usdt: TradingFees = TradingFees(maker=.25, taker=.3)
+    nobitex_usdt: TradingFees = TradingFees(maker=.25, taker=.25)
+
+    def trading_fees(self, exchange, quote):
+        return getattr(self, exchange if quote == 'toman' else exchange + '_usdt').model_dump()
 
 
 settings = Settings(**store.settings({'refresh_seconds': int(os.getenv('REFRESH_SECONDS', '10'))}))
@@ -179,7 +187,6 @@ class ScannerSettings(BaseModel):
     threshold: float = Field(default=.5, ge=0, le=100, allow_inf_nan=False)
     watchlist: list[str] = []
     networks: dict[str, str] = {}
-    trading_overrides: dict[str, dict[str, dict[Literal['maker', 'taker'], float]]] = {}
 
 
 @app.get('/overview')
@@ -194,16 +201,6 @@ def scanner_settings():
 
 @app.put('/api/scanner/settings')
 def save_scanner_settings(value: ScannerSettings):
-    for exchange, coins in value.trading_overrides.items():
-        if exchange not in ('wallex', 'nobitex'):
-            raise HTTPException(400, 'صرافی نامعتبر')
-        for coin, modes in coins.items():
-            try:
-                normalize(coin)
-                if any(not 0 <= v < 100 for v in modes.values()):
-                    raise ValueError()
-            except ValueError:
-                raise HTTPException(400, 'کارمزد نامعتبر')
     scanner.store.save_scanner_settings(value.model_dump())
     return scanner.config()
 

@@ -44,7 +44,9 @@ class Scanner:
         self.budget_locks = {n: asyncio.Lock() for n in URLS}
 
     def config(self):
-        return {'interval': 30, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, 'trading_overrides': {}, **self.store.scanner_settings()}
+        saved = self.store.scanner_settings()
+        saved.pop('trading_overrides', None)  # Ignore legacy per-coin fees.
+        return {'interval': 30, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, **saved}
 
     async def request(self, client, name, url):
         async with self.semaphores[name]:
@@ -149,8 +151,8 @@ class Scanner:
                         else:
                             row['liquidity'] = min(sum(p*v for p,v in book[src].asks), sum(p*v for p,v in book[dst].bids))
                             for mode in ('taker','maker'):
-                                source_fees = {**getattr(settings, src).model_dump(), **cfg['trading_overrides'].get(src, {}).get(coin, {}), **{'withdrawal': fee['withdrawal'], 'minimum': fee['minimum']}}
-                                dest_fees = {**getattr(settings, dst).model_dump(), **cfg['trading_overrides'].get(dst, {}).get(coin, {})}
+                                source_fees = {**settings.trading_fees(src, quote), 'withdrawal': fee['withdrawal'], 'minimum': fee['minimum']}
+                                dest_fees = settings.trading_fees(dst, quote)
                                 try:
                                     row[mode] = calculate(cfg['capital_toman' if quote == 'toman' else 'capital_usdt'], book[src], book[dst], source_fees, dest_fees, mode)
                                 except (ValueError, ZeroDivisionError) as e:
