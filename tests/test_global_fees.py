@@ -53,3 +53,27 @@ def test_quote_specific_fees_both_directions_and_modes(tmp_path):
     assert usdt['maker']['final_quote'] == pytest.approx((100*.95-1)*11*.93)
     reverse = next(r for r in rows if r['source']=='nobitex' and r['quote']=='USDT')
     assert reverse['taker']['final_quote'] == pytest.approx((1000/11*.92-1)*10*.94)
+
+
+def test_api_saves_global_fees_and_drops_legacy_overrides(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    db = Storage(str(tmp_path/'settings.db'))
+    scanner = Scanner(db)
+    db.save_scanner_settings({'trading_overrides': {'wallex': {'BTC': {'maker': 90}}}})
+    monkeypatch.setattr(main, 'store', db)
+    monkeypatch.setattr(main, 'scanner', scanner)
+    monkeypatch.setattr(main, 'settings', Settings())
+    client = TestClient(main.app)
+    cfg = client.get('/api/settings').json()
+    cfg['wallex_usdt']['maker'] = 1.2
+    cfg['nobitex']['taker'] = 2.3
+    assert client.put('/api/settings', json=cfg).status_code == 200
+    restored = Settings(**db.settings())
+    assert restored.wallex_usdt.maker == 1.2 and restored.nobitex.taker == 2.3
+    cfg['wallex_usdt']['maker'] = 100
+    assert client.put('/api/settings', json=cfg).status_code == 422
+    scan_cfg = client.get('/api/scanner/settings').json()
+    assert 'trading_overrides' not in scan_cfg
+    assert client.put('/api/scanner/settings', json=scan_cfg).status_code == 200
+    assert 'trading_overrides' not in db.scanner_settings()

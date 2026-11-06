@@ -19,6 +19,7 @@ from .calculation import calculate
 from .storage import Storage
 from .scanner import Scanner
 from .symbols import normalize
+from .fees import parse_pasted_fees
 from typing import Optional, Literal
 
 load_dotenv()
@@ -203,6 +204,15 @@ def scanner_settings():
 def save_scanner_settings(value: ScannerSettings):
     scanner.store.save_scanner_settings(value.model_dump())
     return scanner.config()
+
+
+class FeePaste(BaseModel):
+    text: str = Field(max_length=200000)
+
+
+@app.post('/api/scanner/fees/preview')
+def preview_fees(value: FeePaste):
+    return parse_pasted_fees(value.text)
 
 
 @app.get('/api/scanner/fees')
