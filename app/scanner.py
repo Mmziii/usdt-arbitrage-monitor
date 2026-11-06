@@ -35,6 +35,7 @@ class Scanner:
         self.store.init_scanner()
         self.markets, self.excluded, self.tickers, self.depth = [], [], {}, {}
         self.market_time = 0
+        self.depth_errors = {}
         self.error = None
         self.depth_cursor = 0
         self.lock = asyncio.Lock()
@@ -97,7 +98,7 @@ class Scanner:
                         try:
                             await self.fetch_depth(client, *key)
                         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
-                            self.depth.pop(key, None)
+                            pass  # fetch_depth records a per-market error
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 self.error = str(exc) or 'دریافت داده بازار ناموفق بود'
                 raise
@@ -107,13 +108,20 @@ class Scanner:
         if not market:
             raise ValueError('بازار مشترک یافت نشد')
         urls = {'wallex': 'https://api.wallex.ir/v1/depth?symbol=' + market['wallex'], 'nobitex': 'https://apiv2.nobitex.ir/v3/orderbook/' + market['nobitex']}
-        data = await asyncio.gather(*(self.request(client, name, url) for name, url in urls.items()))
-        # Existing parser divides Nobitex prices by ten; compensate on USDT books.
-        w = parse_book('wallex', data[0]); n = parse_book('nobitex', data[1])
-        if quote == 'USDT':
-            n.asks = [(p*10, q) for p, q in n.asks]; n.bids = [(p*10, q) for p, q in n.bids]
-        self.depth[(coin, quote)] = {'wallex': w, 'nobitex': n, 'timestamp': min(w.timestamp, n.timestamp)}
-        return self.depth[(coin, quote)]
+        key = (coin, quote)
+        try:
+            data = await asyncio.gather(*(self.request(client, name, url) for name, url in urls.items()))
+            # Existing parser divides Nobitex prices by ten; compensate on USDT books.
+            w = parse_book('wallex', data[0]); n = parse_book('nobitex', data[1])
+            if quote == 'USDT':
+                n.asks = [(p*10, q) for p, q in n.asks]; n.bids = [(p*10, q) for p, q in n.bids]
+            self.depth[key] = {'wallex': w, 'nobitex': n, 'timestamp': min(w.timestamp, n.timestamp)}
+            self.depth_errors.pop(key, None)
+            return self.depth[key]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as exc:
+            self.depth.pop(key, None)
+            self.depth_errors[key] = str(exc) or 'دریافت عمق ناموفق بود'
+            raise
 
     def rows(self, settings):
         cfg = self.config(); fees = self.store.fees(); now = time.time(); rows = []
@@ -132,8 +140,12 @@ class Scanner:
                 else:
                     row['gross_spread'] = (q[dst+'_bid']/q[src+'_ask']-1)*100
                     if row['status'] == 'ok':
-                        if not book or now - book['timestamp'] > 120:
-                            row['status'] = 'depth needed'
+                        if not book:
+                            row['status'] = 'error' if (coin, quote) in self.depth_errors else 'depth needed'
+                            if (coin, quote) in self.depth_errors:
+                                row['error'] = self.depth_errors[(coin, quote)]
+                        elif now - book['timestamp'] > 120:
+                            row['status'] = 'stale'
                         else:
                             row['liquidity'] = min(sum(p*v for p,v in book[src].asks), sum(p*v for p,v in book[dst].bids))
                             for mode in ('taker','maker'):

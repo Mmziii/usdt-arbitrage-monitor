@@ -91,3 +91,18 @@ def test_bulk_scan_and_depth_fixtures(tmp_path):
     assert len(scanner.markets) == 1
     assert scanner.depth['BTC','USDT']['nobitex'].bids == [(110,10)]
     assert scanner.store.scan_history('BTC', 'USDT')[0]['spread_a'] == pytest.approx(10)
+
+
+def test_stale_depth_never_returns_profit(tmp_path):
+    import time
+    from app.scanner import Scanner
+    from app.storage import Storage
+    from app.fetchers import Book
+    from app.main import Settings
+    now = time.time(); s = Scanner(Storage(str(tmp_path/'stale.db')))
+    s.markets = [{'coin':'BTC','quote':'USDT','wallex':'BTCUSDT','nobitex':'BTCUSDT'}]
+    s.tickers = {('BTC','USDT'): dict(wallex_ask=100,wallex_bid=99,nobitex_ask=111,nobitex_bid=110,timestamp=now)}
+    b = Book([(100,10)],[(99,10)],now-121)
+    s.depth = {('BTC','USDT'): {'wallex':b,'nobitex':b,'timestamp':now-121}}
+    s.store.replace_fees([dict(exchange=e,coin='BTC',network='BTC',withdrawal=.01,minimum=0,supported=True) for e in ('wallex','nobitex')])
+    assert all(r['status']=='stale' and 'taker' not in r for r in s.rows(Settings()))
