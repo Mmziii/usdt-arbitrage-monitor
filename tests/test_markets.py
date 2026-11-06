@@ -46,3 +46,48 @@ def test_ticker_parsing_and_per_coin_failure():
     result = quotes(w, n, markets, 123)
     assert result['BTC','toman']['nobitex_bid'] == 100
     assert 'error' in result['ETH','USDT']
+
+
+def test_minimum_breakeven_is_feasible():
+    from app.calculation import breakeven
+    assert breakeven([(10, 100)], [(12, 100)], 0, 0, 1, minimum=20) == pytest.approx(200)
+
+
+def test_scanner_profit_requires_known_fee(tmp_path):
+    from app.scanner import Scanner
+    from app.storage import Storage
+    from app.fetchers import Book
+    from app.main import Settings
+    s = Scanner(Storage(str(tmp_path/'scanner.db')))
+    s.markets = [{'coin':'BTC','quote':'USDT','wallex':'BTCUSDT','nobitex':'BTCUSDT'}]
+    import time
+    now = time.time()
+    s.tickers = {('BTC','USDT'): dict(wallex_ask=100,wallex_bid=99,nobitex_ask=111,nobitex_bid=110,timestamp=now)}
+    s.depth = {('BTC','USDT'): {'wallex':Book([(100,10)],[(99,10)],now), 'nobitex':Book([(111,10)],[(110,10)],now), 'timestamp':now}}
+    rows = s.rows(Settings())
+    assert all(r['status'] == 'fee unknown' and 'taker' not in r for r in rows)
+    s.store.replace_fees([dict(exchange=e,coin='BTC',network='BTC',withdrawal=.01,minimum=.1,supported=True) for e in ('wallex','nobitex')])
+    assert all(r['status'] == 'ok' and 'taker' in r for r in s.rows(Settings()))
+
+
+def test_bulk_scan_and_depth_fixtures(tmp_path):
+    import httpx, time
+    from app.scanner import Scanner
+    from app.storage import Storage
+    now = time.time()
+    w = {'success':True,'result':{'symbols':{'BTCUSDT':{'baseAsset':'BTC','quoteAsset':'USDT','stats':{'askPrice':'100','bidPrice':'99'}}}}}
+    n = {'status':'ok','stats':{'btc-usdt':{'bestSell':'111','bestBuy':'110'}}}
+    def respond(request):
+        if request.url.path == '/v1/markets': return httpx.Response(200,json=w)
+        if request.url.path == '/market/stats': return httpx.Response(200,json=n)
+        if request.url.path == '/v1/depth': return httpx.Response(200,json={'success':True,'result':{'ask':[{'price':'100','quantity':'10'}],'bid':[{'price':'99','quantity':'10'}]}})
+        return httpx.Response(200,json={'status':'ok','lastUpdate':now*1000,'asks':[['111','10']],'bids':[['110','10']]})
+    scanner = Scanner(Storage(str(tmp_path/'test.db')))
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            await scanner.scan(client)
+    import asyncio
+    asyncio.run(run())
+    assert len(scanner.markets) == 1
+    assert scanner.depth['BTC','USDT']['nobitex'].bids == [(110,10)]
+    assert scanner.store.scan_history('BTC', 'USDT')[0]['spread_a'] == pytest.approx(10)

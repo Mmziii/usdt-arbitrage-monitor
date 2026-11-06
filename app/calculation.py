@@ -50,6 +50,7 @@ def breakeven(asks, bids, bf, sf, withdrawal, minimum=0):
     for p, q in asks:
         total += p * q
         knots.append(total)
+    minimum_capital = 0.0
     if minimum > 0:
         target = minimum / (1 - bf)
         remaining, cost = target, 0.0
@@ -58,7 +59,10 @@ def breakeven(asks, bids, bf, sf, withdrawal, minimum=0):
             cost += take * p
             remaining -= take
         if remaining <= 1e-8:
+            minimum_capital = cost
             knots.append(cost)
+        else:
+            return None
     sell_q = 0.0
     for _, q in [(0, 0)] + bids:
         sell_q += q
@@ -86,7 +90,7 @@ def breakeven(asks, bids, bf, sf, withdrawal, minimum=0):
         if profit >= -1e-7:
             if previous and previous[1] < 0:
                 x, y = previous
-                return x + (c - x) * (-y) / (profit - y)
+                return max(minimum_capital, x + (c - x) * (-y) / (profit - y))
             return c
         previous = c, profit
     return None

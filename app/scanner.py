@@ -36,6 +36,7 @@ class Scanner:
         self.markets, self.excluded, self.tickers, self.depth = [], [], {}, {}
         self.market_time = 0
         self.error = None
+        self.depth_cursor = 0
         self.lock = asyncio.Lock()
         self.semaphores = {n: asyncio.Semaphore(2) for n in URLS}
         self.budgets = {n: deque() for n in URLS}
@@ -87,8 +88,12 @@ class Scanner:
                 self.store.scan_record(samples, self.config()['retention_days'])
                 # Cap automatic depth work to two promising markets per cycle.
                 candidates = [(max(q['nobitex_bid']/q['wallex_ask'], q['wallex_bid']/q['nobitex_ask']), key) for key, q in self.tickers.items() if 'error' not in q]
-                for spread, key in sorted(candidates, reverse=True)[:2]:
-                    if spread > 1:
+                candidates = sorted((item for item in candidates if item[0] > 1), reverse=True)
+                if candidates:
+                    start = self.depth_cursor % len(candidates)
+                    selected = (candidates[start:] + candidates[:start])[:2]
+                    self.depth_cursor += len(selected)
+                    for _, key in selected:
                         try:
                             await self.fetch_depth(client, *key)
                         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
@@ -107,7 +112,7 @@ class Scanner:
         w = parse_book('wallex', data[0]); n = parse_book('nobitex', data[1])
         if quote == 'USDT':
             n.asks = [(p*10, q) for p, q in n.asks]; n.bids = [(p*10, q) for p, q in n.bids]
-        self.depth[(coin, quote)] = {'wallex': w, 'nobitex': n, 'timestamp': time.time()}
+        self.depth[(coin, quote)] = {'wallex': w, 'nobitex': n, 'timestamp': min(w.timestamp, n.timestamp)}
         return self.depth[(coin, quote)]
 
     def rows(self, settings):
@@ -130,6 +135,7 @@ class Scanner:
                         if not book or now - book['timestamp'] > 120:
                             row['status'] = 'depth needed'
                         else:
+                            row['liquidity'] = min(sum(p*v for p,v in book[src].asks), sum(p*v for p,v in book[dst].bids))
                             for mode in ('taker','maker'):
                                 source_fees = {**getattr(settings, src).model_dump(), **cfg['trading_overrides'].get(src, {}).get(coin, {}), **{'withdrawal': fee['withdrawal'], 'minimum': fee['minimum']}}
                                 dest_fees = {**getattr(settings, dst).model_dump(), **cfg['trading_overrides'].get(dst, {}).get(coin, {})}
@@ -138,6 +144,8 @@ class Scanner:
                                 except (ValueError, ZeroDivisionError) as e:
                                     row['status'] = 'insufficient depth' if isinstance(e, InsufficientDepth) else 'error'
                                     row['error'] = str(e)
+                    if row['status'] != 'ok':
+                        row.pop('maker', None); row.pop('taker', None)
                     row['depth_timestamp'] = book['timestamp'] if book else None
                 rows.append(row)
         return rows
