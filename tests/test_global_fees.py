@@ -77,3 +77,21 @@ def test_api_saves_global_fees_and_drops_legacy_overrides(tmp_path, monkeypatch)
     assert 'trading_overrides' not in scan_cfg
     assert client.put('/api/scanner/settings', json=scan_cfg).status_code == 200
     assert 'trading_overrides' not in db.scanner_settings()
+
+
+def test_scanner_gross_only_for_missing_source_withdrawal_and_minimum(tmp_path):
+    s = Scanner(Storage(str(tmp_path/'missing.db'))); now = time.time()
+    s.markets = [dict(coin='BTC', quote='toman', wallex='BTCTMN', nobitex='BTCIRT')]
+    s.tickers = {('BTC','toman'): dict(wallex_ask=1000, wallex_bid=990, nobitex_ask=1110, nobitex_bid=1100, timestamp=now), ('USDT','toman'): dict(wallex_bid=50000, nobitex_bid=52000, timestamp=now)}
+    s.depth = {('BTC','toman'): dict(wallex=Book([(1000,20000)],[(990,20000)],now), nobitex=Book([(1110,20000)],[(1100,20000)],now), timestamp=now)}
+    fee_rows = [dict(exchange='wallex',coin='BTC',network='BTC',withdrawal=None,minimum=1,supported=True),dict(exchange='nobitex',coin='BTC',network='BTC',withdrawal=1,minimum=1,supported=True)]
+    s.store.replace_fees(fee_rows)
+    a,b = s.rows(Settings())
+    assert a['status'] == 'fee unknown' and a['gross_spread'] == pytest.approx(10)
+    assert 'maker' not in a and 'taker' not in a
+    assert b['status'] == 'ok' and b['rate'] == 51000
+    assert b['taker']['profit'] / b['rate'] == pytest.approx((b['taker']['profit']) / 51000)
+    fee_rows[0]['withdrawal'],fee_rows[0]['minimum'] = 1,None
+    s.store.replace_fees(fee_rows)
+    assert s.rows(Settings())[0]['status'] == 'minimum unknown'
+    assert 'taker' not in s.rows(Settings())[0]
