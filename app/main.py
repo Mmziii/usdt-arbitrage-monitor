@@ -71,6 +71,7 @@ async def scan_loop():
                 await scanner.scan(client)
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 pass
+            scanner.store.prune(scanner.config()['retention_days'])
             await asyncio.sleep(scanner.config()['interval'])
 
 

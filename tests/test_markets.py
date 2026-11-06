@@ -106,3 +106,16 @@ def test_stale_depth_never_returns_profit(tmp_path):
     s.depth = {('BTC','USDT'): {'wallex':b,'nobitex':b,'timestamp':now-121}}
     s.store.replace_fees([dict(exchange=e,coin='BTC',network='BTC',withdrawal=.01,minimum=0,supported=True) for e in ('wallex','nobitex')])
     assert all(r['status']=='stale' and 'taker' not in r for r in s.rows(Settings()))
+
+
+def test_prune_history_without_successful_scan(tmp_path):
+    import time
+    from app.storage import Storage
+    store = Storage(str(tmp_path/'prune.db')); store.init_scanner()
+    old = time.time() - 2*86400
+    with store.connect() as db:
+        db.execute('INSERT INTO scan_history VALUES (?,?,?,?,?,?,?,?,?)', (old,'BTC','USDT',1,1,1,1,0,0))
+        db.execute('INSERT INTO history VALUES (?,?,?,?,?,?,?,?)', (old,1,1,1,1,0,0,'live'))
+    store.prune(1)
+    assert store.scan_history() == []
+    assert store.history() == []

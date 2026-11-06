@@ -57,10 +57,14 @@ class Storage:
             db.executemany('INSERT INTO network_fees VALUES (?,?,?,?,?,?)', [(r['exchange'],r['coin'],r['network'],r['withdrawal'],r['minimum'],int(r['supported'])) for r in rows])
 
     def scan_record(self, rows, retention_days):
-        import time
         with self.connect() as db:
             db.executemany('INSERT INTO scan_history VALUES (?,?,?,?,?,?,?,?,?)', rows)
-            cutoff = time.time() - retention_days * 86400
+        self.prune(retention_days)
+
+    def prune(self, retention_days):
+        import time
+        cutoff = time.time() - retention_days * 86400
+        with self.connect() as db:
             db.execute('DELETE FROM scan_history WHERE timestamp < ?', (cutoff,))
             db.execute('DELETE FROM history WHERE timestamp < ?', (cutoff,))
 
