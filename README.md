@@ -119,7 +119,13 @@ Run `.venv/bin/python -m pytest -q`. Tests include hand-worked Mode B toman/USDT
 ```sh
 npm install --prefix .cache/ui-test jsdom@26 --no-audit --no-fund
 NODE_PATH=.cache/ui-test/node_modules node tests/ui_smoke.cjs
+NODE_PATH=.cache/ui-test/node_modules node tests/ui_dashboard_smoke.cjs
+NODE_PATH=.cache/ui-test/node_modules node tests/ui_controls_smoke.cjs
+NODE_PATH=.cache/ui-test/node_modules node tests/ui_classic_smoke.cjs
+node tests/sort_order_test.cjs
 ```
+
+API-level checks live in `tests/test_api_sweep.py` (every route with valid/empty/malformed input, no 500, Persian messages), `tests/test_cycle_edges.py` (zero/tiny/oversized capital, withdrawal fee above the amount, missing fees, empty order books) and `tests/test_ui_state.py` / `tests/test_windows_launcher.py`. `DEBUG-REPORT.md` lists every bug fixed in the debug pass with its covering test.
 
 This development-only tool is not needed to install/run the app. No CDNs or external frontend dependencies are used at runtime; the Vazirmatn font remains bundled. DOM checks are not a full visual/browser or live-market verification. Outbound exchange access is blocked in the build sandbox, so live schemas, network/fee accuracy, notifications, settlement times and actual execution could not be verified there.
 
@@ -198,7 +204,9 @@ This development-only tool is not needed to install/run the app. No CDNs or exte
 `GET /api/overview`، `POST /api/overview/refresh`، `POST /api/overview/pause`، `POST /api/overview/visible`، `GET /api/overview/detail?key=`، `GET /api/plan?key=`، `GET /api/diagnostics`، `POST /api/diagnostics/test`، `PUT /api/connection`، `GET /api/amount?text=`، `GET|PUT /api/ui`، `GET /api/backup`، `POST /api/backup/restore`، `GET|POST|DELETE /api/simulations…`، `GET|POST|DELETE /api/journal…`، `GET /api/journal.csv`، `GET /api/wizard`.
 
 ### ۱۰. اجرا در ویندوز
-`start.bat` را دوبار کلیک کنید. اگر پایتون نصب نباشد پیام فارسی + لینک دانلود می‌دهد. برای اولین اجرا محیط `.venv` می‌سازد، `requirements.txt` را نصب می‌کند، `.env` را از نمونه کپی می‌کند و برنامه را روی `127.0.0.1:8000` بالا می‌آورد. بستن پنجره = بستن برنامه. اجرای دستی معادل همان سه دستور بخش اول است.
+`start.bat` را دوبار کلیک کنید. اگر پایتون نصب نباشد یا قدیمی‌تر از ۳.۱۰ باشد، پیام فارسی + نسخه نصب‌شده + لینک دانلود می‌دهد. برای اولین اجرا محیط `.venv` می‌سازد، `requirements.txt` را نصب می‌کند، `.env` را از نمونه کپی می‌کند و برنامه را روی `127.0.0.1:8000` بالا می‌آورد. اگر پورت ۸۰۰۰ مشغول باشد، خودش ۸۰۰۱ تا ۸۰۰۳ را امتحان می‌کند و آدرس درست را در همان پنجره چاپ می‌کند. بستن پنجره = بستن برنامه. اجرای دستی معادل همان سه دستور بخش اول است.
+
+نکته‌ها: مسیر پوشه می‌تواند فاصله داشته باشد (همه مسیرها داخل `"..."` هستند)؛ فایل با CRLF و UTF-8 بدون BOM ذخیره شده و ابتدا `chcp 65001` می‌گیرد. اگر نصب بسته‌ها شکست خورد، پیام راهنما دستور نصب با آینه (mirror) دلخواه شما را چاپ می‌کند.
 
 ### ۱۱. تست‌ها
 ```sh
@@ -206,19 +214,28 @@ This development-only tool is not needed to install/run the app. No CDNs or exte
 npm install --prefix .cache/ui-test jsdom@26 --no-audit --no-fund
 NODE_PATH=.cache/ui-test/node_modules node tests/ui_smoke.cjs
 NODE_PATH=.cache/ui-test/node_modules node tests/ui_dashboard_smoke.cjs
+NODE_PATH=.cache/ui-test/node_modules node tests/ui_controls_smoke.cjs
+NODE_PATH=.cache/ui-test/node_modules node tests/ui_classic_smoke.cjs
+node tests/sort_order_test.cjs
 ```
-- pytest: **۱۴۲ تست** (محاسبات دستی چرخه A/B/pre-funded، محرومیت کارمزد نامعلوم، کشف مسیرها، بودجه/بک‌آف، عیب‌یابی و ساعت، تجزیه مبلغ فارسی، استراتژی داغ/کهنگی، هاب، شبیه‌سازی، دفتر معاملات، APIها و مهاجرت ذخیره‌سازی).
+- pytest: **۲۲۱ تست** (محاسبات دستی چرخه A/B/pre-funded، محرومیت کارمزد نامعلوم، کشف مسیرها، بودجه/بک‌آف، عیب‌یابی و ساعت، تجزیه مبلغ فارسی، استراتژی داغ/کهنگی، هاب، شبیه‌سازی، دفتر معاملات، APIها و مهاجرت ذخیره‌سازی).
+  - `tests/test_api_sweep.py`: همه مسیرهای HTTP با ورودی درست، خالی و خراب؛ هیچ ۵۰۰ و پیام فارسی.
+  - `tests/test_cycle_edges.py`: سرمایه صفر/کوچک/بزرگ‌تر از عمق، کارمزد برداشت بیشتر از مبلغ، کارمزد نامعلوم و دفتر سفارش خالی.
+  - `tests/test_ui_state.py`: ماندگاری «بستن پیام» در SQLite و رد ورودی خراب با پیام فارسی.
+  - `tests/test_windows_launcher.py`: بازبینی متن `start.bat` (CRLF، UTF-8 بدون BOM، نقل‌قول مسیرها، تعادل پرانتزها، پورت جایگزین).
 - `tests/ui_fixture.py` داده تست داشبورد را با **موتور واقعی پایتون** و دفترهای ساختگی می‌سازد؛ هیچ درخواست بیرونی ندارد.
-- `tests/ui_dashboard_smoke.cjs` با jsdom جدول، فیلترها، کشوی جزئیات، عیب‌یابی، شبیه‌سازی، دفتر، کارمزدها، سرمایه، ویزارد و توقف را می‌آزماید. jsdom فقط ابزار توسعه است و در اجرای برنامه لازم نیست.
+- `tests/ui_dashboard_smoke.cjs` با jsdom صفحه‌های `/`, `/overview`, `/settings`, `/classic`, `/guide` و تعامل‌ها را می‌آزماید، `tests/ui_controls_smoke.cjs` همه راه‌های بستن/رد کردن، فوکوس، فریز، فیلترها و پیام‌های خطای فارسی HTTP را، `tests/ui_classic_smoke.cjs` صفحه `/classic` را و `tests/sort_order_test.cjs` قاعده رتبه‌بندی/هیسترزیس/فریز را (بدون DOM). jsdom فقط ابزار توسعه است و در اجرای برنامه لازم نیست.
 
 ### ۱۲. چیزهایی که در این محیط تأیید نشده است (صادقانه)
-شاخه: `arena/47c6edfb-usdt-arbitrage-monitor` — کامیت کد این مرحله: `c77e643`.
+شاخه: `arena/47c6edfb-usdt-arbitrage-monitor` — گزارش کامل رفع اشکال: `DEBUG-REPORT.md`.
 - **دسترسی زنده به صرافی‌ها در سندباکس ساخت مسدود است.** قالب پاسخ‌های بیت‌یونیکس، والکس و نوبیتکس فقط با fixture و مستندات آزمایش شده؛ نه با پاسخ واقعی امروز صرافی.
 - **قالب نماد اسپات بیتیونیکس** (مثل `BTCUSDT` در برابر شکل دیگری) از مستندات قطعی برداشت نشده؛ برنامه نماد را از فیلد `symbol` پاسخ فهرست بازارها می‌خواند، ولی این باید روی لپ‌تاپ دیده شود.
 - **پارامتر `precision` دفتر سفارش** و واحد زمان `ts` بیتیونیکس روی پاسخ واقعی تأیید نشده است.
 - **نبود endpoint عمومی «همه تیکرها»** برای اسپات بیتیونیکس یک نتیجه جستجو در مستندات است؛ اگر وجود داشته باشد، فقط سرعت بهتر می‌شود، نه صحت محاسبه.
 - **کارمزدها و شبکه‌ها** هیچ‌جا خودکار خوانده نمی‌شوند و پیش‌فرض بیتیونیکس خالی است. صحت اعداد واردشده مسئولیت کاربر است.
-- **`start.bat` روی ویندوز واقعی اجرا نشده** (این محیط لینوکس است)؛ منطق آن ساده است ولی اولین اجرا را خودتان ببینید.
+- **`start.bat` روی ویندوز واقعی اجرا نشده** (این محیط لینوکس است)؛ متن آن تست متنی دارد (CRLF، نقل‌قول، تعادل بلوک‌ها) ولی رفتار cmd.exe را فقط ویندوز نشان می‌دهد.
+- **فونت کنسول ویندوز** ممکن است فارسی را درست نمایش ندهد (مثلاً Consolas)؛ همه پیام‌های `start.bat` انگلیسی هم دارند و این روی اجرای برنامه اثری ندارد.
+- **مقادیر عددی فرم‌ها** با کیبورد فارسی/عربی در بعضی مرورگرها ممکن است جداکننده هزارگان بگذارند؛ برنامه رقم فارسی و انگلیسی و «میلیون» را می‌پذیرد، ولی اعداد جداکننده‌دار را یک‌بار روی لپ‌تاپ امتحان کنید.
 - **بازنمایی فارسی/راست‌به‌چپ** فقط در jsdom بررسی شده؛ ظاهر واقعی مرورگر، فونت وزیرمتن و اعداد فارسی را روی لپ‌تاپ ببینید.
 - **زمان انتقال و تأخیر شبکه** دستی وارد می‌شود؛ برنامه آن را حدس نمی‌زند و هیچ اندازه‌گیری زنده‌ای ندارد.
 - **همه اعداد سود تخمینی‌اند.** حتی وقتی همه کارمزدها وارد شده باشند، قیمت در لحظه انتقال تغییر می‌کند.
@@ -234,3 +251,15 @@ NODE_PATH=.cache/ui-test/node_modules node tests/ui_dashboard_smoke.cjs
 8. یک معامله واقعی کوچک در دفتر ثبت کنید و CSV بگیرید.
 9. فایل پشتیبان بگیرید، یک تنظیم را عوض کنید، فایل را بازگردانید و مطمئن شوید تنظیمات برگشت.
 10. «توقف به‌روزرسانی» را بزنید و ببینید درخواست‌ها متوقف می‌شوند (در تب عیب‌یابی سهمیه درخواست دیگر بالا نمی‌رود).
+11. پیام راه‌اندازی بالای صفحه را با ✕ ببندید، صفحه را رفرش کنید و مطمئن شوید بسته می‌ماند؛ سپس ویزارد را باز کنید تا دوباره ظاهر شود.
+12. کشوی جزئیات را با کلید Esc و با کلیک بیرون ببندید و ببینید فوکوس به همان ردیف برمی‌گردد.
+13. اگر پورت ۸۰۰۰ مشغول بود (یک برنامه دیگر)، دوباره `start.bat` را بزنید و آدرس جدید (۸۰۰۱) را ببینید.
+
+### ۱۳. رفع اشکال‌های این مرحله (خلاصه)
+فهرست کامل با مکان، ریشه، اصلاح و تست پوشش‌دهنده در `DEBUG-REPORT.md` است. مهم‌ترین‌ها:
+- دکمه ✕ کار نمی‌کرد چون `.modal{display:flex}` بر `hidden` غلبه می‌کرد؛ قانون سراسری `[hidden]{display:none!important}` اضافه شد و بیست مسیر بستن با jsdom و استایل واقعی آزموده شد.
+- ترتیب ردیف‌ها با هر تازه‌سازی می‌پرید؛ رتبه‌بندی «هیسترزیس» و «فریز» بازنویسی شد (تست بدون DOM).
+- دفتر سفارش خالی یک `IndexError` می‌داد و کل صفحه را ۵۰۰ می‌کرد؛ حالا «عمق ناکافی» با پیام فارسی است.
+- خطاهای ۴۲۲ (اعتبارسنجی) و بعضی ۵۰۳ انگلیسی بودند؛ همه فارسی شدند (هندلر واحد + پیام‌های دامنه).
+- در رابط کاربری، خطای شبکه/۴۲۹/۵۰۰ متن انگلیسی نشان می‌داد و خطای صرافی‌ها `[object Object]` چاپ می‌شد؛ هر دو اصلاح شد.
+- `start.bat`: نقل‌قول تودرتوی باز کردن مرورگر (که cmd خراب می‌کند)، بازکردن مرورگر با `explorer`، بررسی نسخه پایتون، انتخاب پورت آزاد، و راهنمای نصب با آینه.
