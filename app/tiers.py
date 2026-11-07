@@ -2,7 +2,7 @@
 import csv
 import io
 import json
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from typing import Literal
 
 
@@ -26,8 +26,23 @@ def active_fees(settings, exchange, quote):
 
 
 def parse_tiers(text, format):
-    rows = json.loads(text) if format == 'json' else list(csv.DictReader(io.StringIO(text.lstrip('\ufeff'))))
-    tiers = [Tier.model_validate(row) for row in rows]
+    try:
+        rows = (json.loads(text) if format == 'json'
+                else list(csv.DictReader(io.StringIO(text.lstrip('\ufeff')))))
+    except json.JSONDecodeError:
+        raise ValueError('متن JSON معتبر نیست؛ فایل خروجی سطح کارمزد را دوباره بارگذاری کنید.')
+    if not isinstance(rows, list):
+        raise ValueError('سطح کارمزد باید فهرستی از ردیف‌ها باشد.')
+    tiers = []
+    for index, row in enumerate(rows, 1):
+        if not isinstance(row, dict):
+            raise ValueError(f'ردیف {index} سطح کارمزد ساختار درستی ندارد.')
+        try:
+            tiers.append(Tier.model_validate(row))
+        except ValidationError as error:
+            first = error.errors()[0]
+            column = '.'.join(str(part) for part in first.get('loc', ())) or 'ردیف'
+            raise ValueError(f'ردیف {index} سطح کارمزد نامعتبر است؛ ستون «{column}» را بررسی کنید.')
     keys = [(t.exchange, t.quote, t.name) for t in tiers]
     if len(keys) != len(set(keys)):
         raise ValueError('سطح تکراری')

@@ -11,8 +11,10 @@ from pathlib import Path
 import httpx
 import pydantic
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response, FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -227,6 +229,21 @@ static = Path(__file__).parent / 'static'
 app.mount('/static', StaticFiles(directory=static), name='static')
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    '''Malformed input is answered in Persian: the UI shows `detail` verbatim.'''
+    fields = []
+    for error in exc.errors():
+        location = [str(part) for part in error.get('loc', ())
+                    if part not in ('body', 'query', 'path')]
+        fields.append('.'.join(location) or 'ورودی')
+    names = '، '.join(dict.fromkeys(fields))
+    message = ('مقدار ورودی نامعتبر است' + (f' (فیلد {names})' if names else '')
+               + '؛ عددها و متن‌ها را دوباره بررسی کنید.')
+    return JSONResponse(status_code=422, content={'detail': message,
+                                                 'errors': jsonable_encoder(exc.errors())})
+
+
 @app.get('/')
 def index():
     return FileResponse(static / 'dashboard.html')
@@ -329,7 +346,7 @@ class NetworkFee(BaseModel):
     network: str = Field(min_length=1, max_length=40, pattern=r'^[A-Za-z0-9_-]+$')
     withdrawal: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     minimum: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
-    supported: bool
+    supported: bool = Field(strict=True)
 
 
 class ScannerSettings(BaseModel):
@@ -338,9 +355,9 @@ class ScannerSettings(BaseModel):
     hot_rows: int = Field(default=20, ge=0, le=200)
     sort_hysteresis_pct: float = Field(default=.05, ge=0, le=5, allow_inf_nan=False)
     stale_seconds: int = Field(default=120, ge=30, le=3600)
-    paused: bool = False
+    paused: bool = Field(default=False, strict=True)
     conversion_source: Literal['auto', 'wallex', 'nobitex'] = 'auto'
-    show_gross_only: bool = True
+    show_gross_only: bool = Field(default=True, strict=True)
     retention_days: int = Field(default=30, ge=1, le=3650)
     capital_toman: float = Field(default=10000000, gt=0, le=1e15, allow_inf_nan=False)
     capital_usdt: float = Field(default=100, gt=0, le=1e15, allow_inf_nan=False)
@@ -428,7 +445,8 @@ async def scanner_refresh():
         async with httpx.AsyncClient(timeout=8) as client:
             await scanner.scan(client, refresh=True)
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
-        raise HTTPException(503, str(e))
+        raise HTTPException(503, describe('network')['message'] + ' '
+                            + 'دوباره تلاش کنید؛ اگر تکرار شد تب «عیب‌یابی» را ببینید.')
     return {'ok': True}
 
 
@@ -438,8 +456,9 @@ async def scanner_detail(coin: str, quote: Literal['toman', 'USDT']):
         coin = normalize(coin)
         async with httpx.AsyncClient(timeout=8) as client:
             books = await scanner.fetch_depth(client, coin, quote)
-    except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as e:
-        raise HTTPException(503, str(e))
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
+        raise HTTPException(503, 'دفتر سفارش این بازار دریافت نشد؛ کمی بعد دوباره تلاش کنید '
+                                 'یا تب «عیب‌یابی» را ببینید.')
     return {'books': {n: {'asks': books[n].asks[:10], 'bids': books[n].bids[:10]} for n in ('wallex', 'nobitex')}, 'rows': [r for r in scanner.rows(settings) if r['coin'] == coin and r['quote'] == quote], 'history': scanner.store.scan_history(coin, quote)}
 
 
@@ -577,7 +596,7 @@ async def api_overview_refresh():
 
 
 class PauseRequest(BaseModel):
-    paused: bool
+    paused: bool = Field(strict=True)
 
 
 @app.post('/api/overview/pause')

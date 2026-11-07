@@ -62,3 +62,40 @@ def test_persian_copy_is_used_on_the_new_pages():
         assert 'dir="rtl"' in text and 'lang="fa"' in text
         persian = len(re.findall(r'[\u0600-\u06ff]', text))
         assert persian > 500, name
+
+
+def test_stylesheet_pins_the_hidden_attribute():
+    """The X button bug came from .modal{display:flex} beating [hidden]; keep the guard."""
+    css = (STATIC / 'ui.css').read_text(encoding='utf-8')
+    assert re.search(r'\[\s*hidden\s*\]\s*\{[^}]*display\s*:\s*none\s*!important', css), \
+        'ui.css needs a global [hidden] { display: none !important } rule'
+    # A component rule that sets display must never be able to override it.
+    for selector in ['.modal {', '.menu {', '.banner {', '.chip {']:
+        assert selector in css
+    assert css.index('[hidden]') < css.index('.modal {')
+
+
+def test_theme_tokens_exist_without_javascript():
+    css = (STATIC / 'ui.css').read_text(encoding='utf-8')
+    root = css[css.index(':root {'):css.index('}', css.index(':root {'))]
+    for token in ['--bg:', '--text:', '--surface:', '--border:']:
+        assert token in root, token
+    html = (STATIC / 'dashboard.html').read_text(encoding='utf-8')
+    assert 'data-theme="system"' in html
+
+
+def test_close_controls_exist_on_the_dashboard():
+    html = (STATIC / 'dashboard.html').read_text(encoding='utf-8')
+    for control in ['drawerClose', 'wizardClose', 'manualClose', 'setupBannerClose',
+                    'messageClose']:
+        assert 'id="' + control + '"' in html, control
+
+
+def test_guide_page_is_static_and_linked():
+    guide = (STATIC / 'guide.html').read_text(encoding='utf-8')
+    assert '<script' not in guide
+    assert 'data-theme="system"' in guide
+    for href in ['href="/"', 'href="/settings"', 'href="/static/ui.css"']:
+        assert href in guide, href
+    dashboard = (STATIC / 'dashboard.html').read_text(encoding='utf-8')
+    assert 'href="/guide"' in dashboard

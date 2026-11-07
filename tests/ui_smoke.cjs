@@ -26,6 +26,8 @@ const dom=new JSDOM(fs.readFileSync('app/static/overview.html','utf8'),{runScrip
 const w=dom.window;
 let cfg=structuredClone(fixture.snapshot.settings), settings=structuredClone(fixture.settings), saves=0;
 w.setTimeout=()=>1;w.clearTimeout=()=>{};w.confirm=()=>true;
+w.Element.prototype.scrollIntoView=function(){};
+w.HTMLElement.prototype.focus=w.HTMLElement.prototype.focus||function(){};
 w.fetch=async(url,opts={})=>{let value;
  if(url==='/api/scanner/settings'){if(opts.method==='PUT'){cfg=JSON.parse(opts.body);saves++}value=cfg}
  else if(url==='/api/settings'){if(opts.method==='PUT'){settings=JSON.parse(opts.body);saves++}value=settings}
@@ -51,14 +53,20 @@ async function settle(){for(let i=0;i<40;i++)await Promise.resolve()}
  assert.match(doc.querySelector('#detailBody').textContent,/هزینه جداگانه بازتوازن/);
  assert.match(doc.querySelector('#detailBody').textContent,/هزینه بازتوازن نامعلوم/);
  assert.match(doc.querySelector('#detailBody').textContent,/موجودی‌ها محدود نشده‌اند/);
+ doc.querySelector('#closeDetail').click();
+ assert.equal(doc.querySelector('#detail').hidden,true);
+ await vm.runInContext("openDetail('BTC','USDT')",ctx);await settle();
+ assert.equal(doc.querySelector('#detail').hidden,false);
  doc.querySelector('#statsTab').click();await settle();
  assert.equal(doc.querySelector('#statistics').hidden,false);
+ doc.querySelector('#marketTab').click();await settle();
+ assert.equal(doc.querySelector('#statistics').hidden,true);
  assert.match(doc.querySelector('#statsBody').textContent,/میانه/);
  await doc.querySelector('#modeForm').onsubmit({preventDefault(){}});await settle();
  assert.equal(saves,1);assert.equal(cfg.safety_margin,.3);
  const selector=doc.querySelector('[data-row-mode]');selector.value='transfer';await selector.onchange();await settle();
  assert.equal(cfg.row_modes[selector.dataset.rowMode],'transfer');
  assert.equal(doc.querySelector('#message').textContent,'');
- console.log('DOM smoke passed: overview, safety color, detail/rebalancing, statistics, policy save, per-row mode.');
+ console.log('DOM smoke passed: overview, safety color, detail open/close, statistics, policy save, per-row mode.');
  dom.window.close();
 })().catch(e=>{console.error(e);process.exitCode=1});
