@@ -91,9 +91,9 @@ class Scanner:
                     if 'error' not in q:
                         samples.append((now, coin, quote, q['wallex_bid'], q['wallex_ask'], q['nobitex_bid'], q['nobitex_ask'], (q['nobitex_bid']/q['wallex_ask']-1)*100, (q['wallex_bid']/q['nobitex_ask']-1)*100))
                 self.store.scan_record(samples, self.config()['retention_days'])
-                # Cap automatic depth work to two promising markets per cycle.
+                # Cap work to two markets; revisit previously observed depth even after raw spread turns negative.
                 candidates = [(max(q['nobitex_bid']/q['wallex_ask'], q['wallex_bid']/q['nobitex_ask']), key) for key, q in self.tickers.items() if 'error' not in q]
-                candidates = sorted((item for item in candidates if item[0] > 1), reverse=True)
+                candidates = sorted((item for item in candidates if item[0] > 1 or item[1] in self.depth), reverse=True)
                 if candidates:
                     start = self.depth_cursor % len(candidates)
                     selected = (candidates[start:] + candidates[:start])[:2]

@@ -19,10 +19,10 @@ from .calculation import calculate
 from .storage import Storage
 from .scanner import Scanner
 from .symbols import normalize
-from .fees import parse_pasted_fees
+from .fees import parse_pasted_fees, resolve
 from .tiers import Tier, active_fees, parse_tiers, export_tiers
 from .opportunities import OpportunityTracker, statistics
-from .trading import transfer_time
+from .trading import transfer_time, evaluate
 from typing import Optional, Literal
 
 load_dotenv()
@@ -48,6 +48,14 @@ class Settings(BaseModel):
 
     fee_tiers: list[Tier] = []
     current_tiers: dict[str, str] = {}
+
+    @model_validator(mode='after')
+    def unique_tiers(self):
+        keys = [(t.exchange, t.quote, t.name) for t in self.fee_tiers]
+        if len(keys) != len(set(keys)):
+            raise ValueError('سطح تکراری')
+        return self
+
 
     def trading_fees(self, exchange, quote):
         return {k: v for k, v in active_fees(self, exchange, quote).items() if k in ('maker', 'taker')}
@@ -158,7 +166,17 @@ def snapshot(capital: float = 10000000):
             for mode in ('maker', 'taker'):
                 row = {'source': src, 'destination': dst, 'mode': mode}
                 try:
-                    row.update(calculate(capital, active[src], active[dst], getattr(settings, src).model_dump(), getattr(settings, dst).model_dump(), mode))
+                    cfg = scanner.config()
+                    trading_mode = cfg['row_modes'].get(':'.join(('USDT', 'toman', src, dst)), cfg['trading_mode'])
+                    coin_reset = resolve(scanner.store.fees(), 'USDT', dst, cfg['networks'].get('USDT'))
+                    quote_reset = resolve(scanner.store.fees(), 'TOMAN', src, cfg['networks'].get('TOMAN'))
+                    row.update(evaluate(capital, active[src], active[dst],
+                        {**settings.trading_fees(src, 'toman'), 'withdrawal': getattr(settings, src).withdrawal}, settings.trading_fees(dst, 'toman'), mode,
+                        trading_mode, cfg['coin_margins'].get('USDT', cfg['safety_margin']), cfg['balances'].get(src, {}).get('toman'),
+                        cfg['balances'].get(dst, {}).get('USDT'), cfg['rebalance_trades'],
+                        coin_reset.get('withdrawal') if coin_reset['status'] == 'ok' else None,
+                        quote_reset.get('withdrawal') if quote_reset['status'] == 'ok' else None))
+                    row['fee_sources'] = {n: active_fees(settings, n, 'toman')['fee_source'] for n in (src,dst)}
                 except ValueError as exc:
                     row['error'] = str(exc)
                 rows.append(row)
@@ -331,8 +349,9 @@ def tiers_import(value: TierImport):
 
 @app.get('/api/opportunities')
 def opportunity_stats(coin: Optional[str] = None, mode: Optional[Literal['transfer', 'prefunded']] = None, network: Optional[str] = None):
+    mode = mode or scanner.config()['trading_mode']
     rows = tracker.rows(coin, mode)
-    minutes = transfer_time(scanner.config(), network)['minutes'] if mode != 'prefunded' else None
+    minutes = transfer_time(scanner.config(), network)['minutes'] if mode == 'transfer' else None
     return {'overall': statistics(rows, minutes), 'coins': {c: statistics([r for r in rows if r['coin'] == c], minutes) for c in sorted({r['coin'] for r in rows})}, 'transfer_minutes': minutes}
 
 

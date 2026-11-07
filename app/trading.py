@@ -25,6 +25,8 @@ def evaluate(capital, source, destination, source_fees, destination_fees, liquid
     result.update(capital_limits(source.asks, destination.bids, sf[liquidity]/100,
                                 destination_fees[liquidity]/100, sf['withdrawal'], sf.get('minimum', 0),
                                 0 if prefunded else margin, quote_balance if prefunded else None, coin_balance if prefunded else None))
+    if result['breakeven_capital'] is not None and result['breakeven_capital'] > result.get('visible_capital', 0):
+        result['breakeven_capital'] = None
     if prefunded:
         # Reset direction is destination -> source for coin, source -> destination for quote.
         coin_cost = None if rebalance_coin_fee is None else rebalance_coin_fee * destination.bids[0][0]
