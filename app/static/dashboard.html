@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html lang="fa" dir="rtl" data-theme="system">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -55,9 +55,13 @@
   <strong>راه‌اندازی کامل نشده است.</strong>
   <span id="setupMissing"></span>
   <button id="setupBannerAction" type="button">تکمیل راه‌اندازی</button>
+  <button id="setupBannerClose" class="ghost banner-close" type="button" aria-label="بستن این پیام">✕</button>
 </div>
 
-<div id="message" class="message" role="status" aria-live="polite"></div>
+<div id="message" class="message" role="status" aria-live="polite" hidden>
+  <span id="messageText"></span>
+  <button id="messageClose" class="ghost message-close" type="button" aria-label="بستن پیام">✕</button>
+</div>
 
 <main id="main">
   <section id="tab-opportunities" class="tab active" aria-label="فرصت‌ها">

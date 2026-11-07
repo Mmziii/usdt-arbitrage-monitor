@@ -10,6 +10,7 @@
       activeTab: 'opportunities', drawerKey: null, drawerTab: 'breakdown', drawer: null,
       wizardStep: 1, wizardDraft: null, loading: true, sounds: {}, audio: null,
       lastRender: 0, thresholdFired: {}, rowEls: new Map(), initialized: false,
+      returnFocus: {}, messageDismissed: null, wizardBusy: false,
     },
   };
 
@@ -100,14 +101,68 @@
   App.put = body => ({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   App.post = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+  // A dismissed error comes back when the text changes or after this delay, so a real
+  // problem is never hidden forever but the banner stops covering the page every poll.
+  App.MESSAGE_REOPEN_MS = 120000;
+
   App.message = function (text, isError) {
     const node = $('message');
     if (!node) return;
-    node.textContent = text || '';
+    const value = text == null ? '' : String(text);
+    const target = $('messageText') || node;
+    if (!value) {
+      node.hidden = true;
+      node.className = 'message';
+      target.textContent = '';
+      App.state.messageDismissed = null;
+      return;
+    }
+    const dismissed = App.state.messageDismissed;
+    if (dismissed && dismissed.text === value && Date.now() - dismissed.at < App.MESSAGE_REOPEN_MS) {
+      node.hidden = true;
+      return;
+    }
+    if (dismissed && dismissed.text !== value) App.state.messageDismissed = null;
+    target.textContent = value;
     node.className = 'message' + (isError ? ' error' : '');
+    node.hidden = false;
   };
 
   App.error = error => App.message('خطا: ' + (error && error.message ? error.message : error), true);
+
+  App.dismissMessage = function () {
+    const node = $('message');
+    if (!node) return;
+    const text = ($('messageText') || node).textContent || '';
+    node.hidden = true;
+    App.state.messageDismissed = text ? { text: text, at: Date.now() } : null;
+  };
+
+  // ---------------------------------------------------------- overlays and focus
+  App.showLayer = function (element, focusSelector) {
+    if (!element) return;
+    const active = document.activeElement;
+    if (active && active !== element && !element.contains(active)) {
+      App.state.returnFocus[element.id] = active;
+    }
+    element.hidden = false;
+    const preferred = focusSelector ? element.querySelector(focusSelector) : null;
+    const target = preferred || element.querySelector(
+      'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (target && typeof target.focus === 'function') target.focus();
+  };
+
+  App.hideLayer = function (element) {
+    if (!element || element.hidden) return;
+    element.hidden = true;
+    const previous = App.state.returnFocus[element.id];
+    delete App.state.returnFocus[element.id];
+    if (previous && document.contains(previous) && typeof previous.focus === 'function') {
+      previous.focus();
+    }
+  };
+
+  App.isLayerOpen = element => !!element && !element.hidden;
 
   App.helpIcon = term => '<span class="help" tabindex="0" role="button" data-help="' + term +
     '" aria-label="توضیح ' + App.esc(term) + '" title="' + App.esc(HELP[term] || '') + '">؟</span>';
@@ -401,10 +456,13 @@
       const value = Math.abs(Number(row.net_pct));
       return Number.isFinite(value) ? Math.max(max, value) : max;
     }, 0);
-    let ordered = Sort.orderRows(rows, App.state.order, App.hysteresis());
+    // Freeze means "do not reorder": an infinite hysteresis gap keeps the previous order.
+    const gap = App.state.freeze ? Infinity : App.hysteresis();
+    let ordered = Sort.orderRows(rows, App.state.order, gap);
     App.state.order = ordered;
     const byKey = new Map(rows.map(row => [row.key, row]));
     const list = ordered.map(key => byKey.get(key)).filter(Boolean);
+    const focusedKey = App.focusedRowKey();
     const wasProfit = App.state.prevProfit;
     const flashed = new Set(Sort.newlyProfitable(list, wasProfit));
     $('loadingState').hidden = !App.state.loading;
@@ -414,9 +472,10 @@
         : (data.errors ? 'دریافت داده ناموفق بود: ' + data.errors
           : 'با این فیلترها ردیفی پیدا نشد. فیلترها را ساده‌تر کنید یا «به‌روزرسانی الان» را بزنید.');
     }
-    if (!animate || !tbody.children.length || App.state.freeze || App.state.hover) {
+    if (!animate || !tbody.children.length || App.state.freeze || App.isHovering()) {
       tbody.innerHTML = list.map((row, index) => App.rowHtml(row, index, maxAbs)).join('');
       App.bindRows();
+      App.restoreRowFocus(focusedKey);
     } else {
       App.animateTo(list, maxAbs);
     }
@@ -443,6 +502,30 @@
     return String(value).replace(/["\\]/g, '\\$&');
   }
   App.cssEscape = cssEscape;
+
+  // Hovering pauses the FLIP animation. The flag can stick after the table body is
+  // replaced under the pointer, so the live :hover state wins whenever it is available.
+  App.isHovering = function () {
+    const tbody = $('rows');
+    try {
+      if (tbody && typeof tbody.matches === 'function' && tbody.matches(':hover')) return true;
+    } catch (error) { /* jsdom and old browsers */ }
+    return !!App.state.hover;
+  };
+
+  App.focusedRowKey = function () {
+    const active = document.activeElement;
+    if (!active || !active.closest) return null;
+    const row = active.closest('#rows [data-key]');
+    return row ? row.dataset.key : null;
+  };
+
+  App.restoreRowFocus = function (key) {
+    if (!key) return;
+    const tbody = $('rows');
+    const node = tbody && tbody.querySelector('[data-key="' + cssEscape(key) + '"]');
+    if (node && typeof node.focus === 'function') node.focus();
+  };
 
   App.animateTo = function (list, maxAbs) {
     const tbody = $('rows');
@@ -780,11 +863,11 @@
   App.bindGlobal = function () {
     if (App.state.bound) return;
     App.state.bound = true;
-    $('menuToggle').onclick = function () {
-      const panel = $('menuPanel');
-      panel.hidden = !panel.hidden;
-      $('menuToggle').setAttribute('aria-expanded', String(!panel.hidden));
+    $('menuToggle').onclick = function (event) {
+      event.stopPropagation();
+      App.toggleMenu();
     };
+    if ($('messageClose')) $('messageClose').onclick = App.dismissMessage;
     document.querySelectorAll('[data-tab]').forEach(function (link) {
       link.onclick = function (event) {
         event.preventDefault();
@@ -830,13 +913,27 @@
       if (help) { App.showHelp(help); event.preventDefault(); return; }
       if (!event.target.closest || !event.target.closest('.help-pop')) App.hideHelp();
     });
+    // mousedown, not click: a row click opens the drawer after this event has passed,
+    // so the freshly opened drawer (or menu) can never close itself.
+    document.addEventListener('mousedown', function (event) {
+      if (!event.target.closest || !event.target.closest('#menuPanel, #menuToggle')) App.closeMenu();
+      const drawer = $('drawer');
+      if (!App.isLayerOpen(drawer) || drawer.contains(event.target)) return;
+      if (event.target.closest && event.target.closest('#wizard, #manualDrawer')) return;
+      App.closeDrawer();
+    });
+    window.addEventListener('blur', function () { App.state.hover = false; });
+    document.addEventListener('mouseout', function (event) {
+      if (!event.relatedTarget) App.state.hover = false;
+    });
     document.addEventListener('keydown', function (event) {
       const typing = /INPUT|SELECT|TEXTAREA/.test((event.target.tagName || '').toUpperCase());
       if (event.key === 'Escape') {
         App.hideHelp();
-        if ($('drawer') && !$('drawer').hidden) App.closeDrawer();
-        if ($('wizard') && !$('wizard').hidden) $('wizard').hidden = true;
-        if ($('manualDrawer') && !$('manualDrawer').hidden) $('manualDrawer').hidden = true;
+        App.closeMenu();
+        if (App.isLayerOpen($('manualDrawer')) && App.closeManual) App.closeManual();
+        else if (App.isLayerOpen($('wizard')) && App.closeWizard) App.closeWizard();
+        else if (App.isLayerOpen($('drawer'))) App.closeDrawer();
       }
       if ((event.key === '/' || (event.ctrlKey && event.key.toLowerCase() === 'k')) && !typing) {
         event.preventDefault();
@@ -853,14 +950,43 @@
     window.addEventListener('resize', function () { App.hideHelp(); });
   };
 
+  App.toggleMenu = function (open) {
+    const panel = $('menuPanel');
+    if (!panel) return;
+    const next = open == null ? panel.hidden : !!open;
+    panel.hidden = !next;
+    if ($('menuToggle')) $('menuToggle').setAttribute('aria-expanded', String(next));
+  };
+
+  App.closeMenu = function () { if ($('menuPanel') && !$('menuPanel').hidden) App.toggleMenu(false); };
+
   App.renderWizardBanner = function (wizard) {
     const banner = $('setupBanner');
     if (!banner) return;
     const missing = (wizard && wizard.missing) || [];
-    banner.hidden = !missing.length;
-    if (!missing.length) return;
+    if (!missing.length) {
+      banner.hidden = true;
+      return;
+    }
+    const signature = missing.join('|');
     $('setupMissing').textContent = 'موارد لازم: ' + missing.join('، ');
     $('setupBannerAction').onclick = function () { if (App.openWizard) App.openWizard(1); };
+    // A dismissed notice stays closed for the same list of missing items, and comes back
+    // as soon as the list changes (e.g. one fee fewer or one fee more is still missing).
+    const ui = App.state.ui || {};
+    const dismissed = ui.setup_banner_dismissed || '';
+    if (dismissed === signature) {
+      banner.hidden = true;
+      return;
+    }
+    banner.hidden = false;
+    if ($('setupBannerClose')) {
+      $('setupBannerClose').onclick = function () {
+        banner.hidden = true;
+        App.saveUi({ setup_banner_dismissed: signature }).catch(function () { /* optional */ });
+        App.message('این پیام بسته شد. هر وقت خواستید از دکمه «راه‌اندازی» تنظیمات را کامل کنید.');
+      };
+    }
   };
 
   App.init = function () {

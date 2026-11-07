@@ -24,20 +24,26 @@
     const gap = Math.max(0, Number(hysteresis) || 0);
     const byKey = new Map();
     rows.forEach(function (row) { byKey.set(row.key, row); });
-    const order = [];
-    const seen = new Set();
-    (previousOrder || []).forEach(function (key) {
-      if (byKey.has(key) && !seen.has(key)) { order.push(key); seen.add(key); }
-    });
-    rows.forEach(function (row) {
-      if (!seen.has(row.key)) { order.push(row.key); seen.add(row.key); }
-    });
-    // Deterministic float key ordering first, so a fresh page is ranked by profit.
-    order.sort(function (a, b) {
-      const diff = score(byKey.get(b)) - score(byKey.get(a));
-      return diff !== 0 ? diff : String(a).localeCompare(String(b));
-    });
-    // A single bubble pass chain: only swap when the improvement is worth it.
+    const previous = (previousOrder || []).filter(function (key) { return byKey.has(key); });
+    const seen = new Set(previous);
+    // A page refresh keeps the order the user was looking at; brand-new rows join at the
+    // end, ranked by profit among themselves, and may then climb through the gap checks.
+    const fresh = rows.filter(function (row) { return !seen.has(row.key); })
+      .sort(function (a, b) {
+        const diff = score(b) - score(a);
+        return diff !== 0 ? diff : String(a.key).localeCompare(String(b.key));
+      });
+    const order = previous.concat(fresh.map(function (row) { return row.key; }));
+    if (!previous.length) {
+      // First render (or a completely new result set): rank by profit.
+      order.sort(function (a, b) {
+        const diff = score(byKey.get(b)) - score(byKey.get(a));
+        return diff !== 0 ? diff : String(a).localeCompare(String(b));
+      });
+      return order;
+    }
+    // Bubble passes: swap only when a row is better by more than the hysteresis gap.
+    // An infinite gap (the "freeze order" switch) never swaps, so the order is locked.
     for (let pass = 0; pass < order.length; pass++) {
       let swapped = false;
       for (let i = 0; i < order.length - 1; i++) {

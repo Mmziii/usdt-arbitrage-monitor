@@ -140,7 +140,8 @@ function visible(id) { return doc.getElementById(id).hidden === false; }
   assert.match(text('diagCards'), /والکس/);
   assert.match(text('diagCards'), /۴۵۱/);
   assert.match(text('diagCards'), /VPN/);
-  assert.equal(visible('diagClock'), true);
+  assert.equal(visible('diagClock'), false, 'no warning banner when the clock is fine');
+  assert.match(text('diagCards'), /اختلاف ساعت/);
   assert.match(text('budgetTable'), /باقی‌مانده/);
   assert.match(text('reasonCatalog'), /درخواست موفق بود/);
 

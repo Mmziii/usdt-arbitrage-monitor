@@ -11,7 +11,7 @@
     if (!drawer) return;
     App.state.drawerKey = key;
     App.state.drawerTab = 'breakdown';
-    drawer.hidden = false;
+    App.showLayer(drawer, '#drawerClose');
     $('drawerBody').innerHTML = '<p class="loading">در حال خواندن دفتر سفارش…</p>';
     $('drawerTitle').textContent = 'جزئیات';
     $('drawerSub').textContent = '';
@@ -29,10 +29,12 @@
   };
 
   App.closeDrawer = function () {
-    if ($('drawer')) $('drawer').hidden = true;
+    const drawer = $('drawer');
+    const wasOpen = App.isLayerOpen(drawer);
+    App.hideLayer(drawer);
     App.state.drawerKey = null;
     App.state.drawer = null;
-    App.markVisible();
+    if (wasOpen) App.markVisible();
   };
 
   App.markVisible = function () {

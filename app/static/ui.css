@@ -5,14 +5,18 @@
   font-display: swap;
 }
 
+/* The `hidden` attribute must beat component display rules such as
+   `.modal{display:flex}`, `.menu{display:flex}`, `.banner{display:flex}` and
+   `.chip{display:inline-flex}`. Without this, a "closed" dialog stays on screen and
+   swallows every click, which is exactly the "X does not close anything" bug. */
+[hidden] { display: none !important; }
+
 :root {
   --font-base: 17px;
   --radius: 14px;
   --gap: 18px;
   color-scheme: dark;
-}
-
-html[data-theme='dark'], html[data-theme='system'] {
+  /* Dark is the default, so the page has colours even before /api/ui answers. */
   --bg: #0d1418;
   --bg-soft: #131d24;
   --surface: #17232c;
@@ -168,11 +172,13 @@ main { padding: var(--gap) clamp(14px, 2.5vw, 34px) 40px; }
   display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
 }
 .banner.warning { color: var(--text); }
-.message:not(:empty) {
+.message {
   margin: 0 clamp(14px, 2.5vw, 34px) var(--gap); padding: 12px 16px; border-radius: 12px;
   background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; gap: 10px; align-items: center; justify-content: space-between;
 }
 .message.error { border-color: var(--red); color: var(--red-text); }
+.message-close, .banner-close { margin-inline-start: auto; padding: 4px 10px; min-height: 32px; background: transparent; }
 
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--gap); margin-bottom: var(--gap); }
 .card {

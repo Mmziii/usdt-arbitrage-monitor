@@ -75,9 +75,10 @@
         clockBox.innerHTML = clocks.map(clock =>
           '<strong>' + App.esc(clock.message) + '</strong><br><span class="small">' + App.esc(clock.action) + '</span>').join('<hr>');
       } else {
-        clockBox.hidden = data.generated_at == null;
-        clockBox.innerHTML = '<span class="muted small">اختلاف ساعت صرافی‌ها در محدوده امن است' +
-          (extra.clock_skew_warning_seconds ? ' (آستانه ' + App.fmt(extra.clock_skew_warning_seconds) + ' ثانیه)' : '') + '.</span>';
+        // A warning-coloured banner is only shown when there is something to warn about;
+        // the per-exchange clock line already carries the healthy value.
+        clockBox.hidden = true;
+        clockBox.innerHTML = '';
       }
     }
 
@@ -422,7 +423,7 @@
     const modal = $('wizard');
     if (!modal) return;
     App.state.wizardStep = Math.max(1, Math.min(WIZARD_STEPS.length, step || 1));
-    modal.hidden = false;
+    App.showLayer(modal, '#wizardClose');
     try {
       const [settings, scanner, fees] = await Promise.all([
         App.api('/api/settings'), App.api('/api/scanner/settings'), App.api('/api/scanner/fees')]);
@@ -521,8 +522,13 @@
     }
   };
 
+  App.closeWizard = function () {
+    App.state.wizardBusy = false;
+    App.hideLayer($('wizard'));
+  };
+
   App.wizardFinish = async function () {
-    $('wizard').hidden = true;
+    App.closeWizard();
     try {
       await App.saveUi({ wizard_done: true });
       App.message('راه‌اندازی ذخیره شد.');
@@ -531,6 +537,9 @@
   };
 
   App.wizardForward = async function () {
+    if (App.state.wizardBusy) return;
+    App.state.wizardBusy = true;
+    if ($('wizardNext')) $('wizardNext').disabled = true;
     const step = App.state.wizardStep;
     try {
       if (step === 1) {
@@ -571,6 +580,9 @@
     } catch (error) {
       App.error(error);
       return;
+    } finally {
+      App.state.wizardBusy = false;
+      if ($('wizardNext')) $('wizardNext').disabled = false;
     }
     if (step === WIZARD_STEPS.length) { App.wizardFinish(); return; }
     App.state.wizardStep = step + 1;
@@ -581,7 +593,7 @@
   App.openManual = function () {
     const modal = $('manualDrawer');
     if (!modal) return;
-    modal.hidden = false;
+    App.showLayer(modal, '#manualClose');
     $('manualForms').innerHTML = ['wallex', 'nobitex'].map(function (name) {
       return '<fieldset><legend>' + App.exchangeLabel(name) + '</legend>' +
         '<label>قیمت فروش صرافی (ask، تومان)<input id="manual-ask-' + name + '" type="number" step="any" min="1"></label>' +
@@ -604,15 +616,16 @@
   };
 
   App.closeManual = function () {
-    const modal = $('manualDrawer');
-    if (modal) modal.hidden = true;
+    App.hideLayer($('manualDrawer'));
   };
 
   // -------------------------------------------------------------------------- init
   App.initPanels = function () {
+    if (App.state.panelsReady) return;
+    App.state.panelsReady = true;
     if ($('drawerClose')) $('drawerClose').onclick = function () { App.closeDrawer(); };
     if ($('wizardOpen')) $('wizardOpen').onclick = function () { App.openWizard(1); };
-    if ($('wizardClose')) $('wizardClose').onclick = function () { $('wizard').hidden = true; };
+    if ($('wizardClose')) $('wizardClose').onclick = function () { App.closeWizard(); };
     if ($('wizardPrev')) $('wizardPrev').onclick = function () { App.wizardBack(); };
     if ($('wizardNext')) $('wizardNext').onclick = function () { App.wizardForward(); };
     if ($('manualOpen')) $('manualOpen').onclick = function () { App.openManual(); };
@@ -624,6 +637,14 @@
     App.bindSetup();
     $('wizard').addEventListener('keydown', function (event) {
       if (event.key === 'Enter' && event.target.tagName === 'INPUT') { event.preventDefault(); App.wizardForward(); }
+    });
+    // Clicking the dimmed backdrop closes the dialog, exactly like the X button.
+    [['wizard', App.closeWizard], ['manualDrawer', App.closeManual]].forEach(function (pair) {
+      const modal = $(pair[0]);
+      if (!modal) return;
+      modal.addEventListener('mousedown', function (event) {
+        if (event.target === modal) pair[1]();
+      });
     });
   };
 })();

@@ -504,6 +504,9 @@ UI_DEFAULTS = {
     'pins': [], 'presets': [], 'freeze_sort': False, 'sound': False, 'desktop': False,
     'last_filter': {}, 'wizard_done': False, 'welcome_seen': False,
     'bitunix_batch_note': True,
+    # Signature of the "setup is incomplete" banner the user closed, so a dismissed
+    # notice stays closed until the list of missing items actually changes.
+    'setup_banner_dismissed': '',
 }
 
 
@@ -764,6 +767,11 @@ def api_ui_put(value: UiUpdate):
         raise HTTPException(400, 'فهرست ارزهای پین‌شده نامعتبر است')
     if 'presets' in clean and not isinstance(clean['presets'], list):
         raise HTTPException(400, 'فیلترهای ذخیره‌شده نامعتبر است')
+    if 'setup_banner_dismissed' in clean:
+        value = clean['setup_banner_dismissed']
+        if not isinstance(value, str):
+            raise HTTPException(400, 'وضعیت بستن پیام راه‌اندازی نامعتبر است')
+        clean['setup_banner_dismissed'] = value[:500]
     store.save_ui_state(clean)
     hub.invalidate()
     return ui_payload()
