@@ -165,7 +165,8 @@ def _effective_rate(result, route):
 
 
 def evaluate_cycle(route, books, fees, withdrawals, capital, margin=0.0,
-                   trading_mode='transfer', rebalance_trades=10, limit=None, now=0.0):
+                   trading_mode='transfer', rebalance_trades=10, limit=None, now=0.0,
+                   envelope=True):
     """Full result for one route: taker + maker hypothetical + gross reference."""
     prefunded = trading_mode == 'prefunded'
     result = {'route': route, 'route_label': ROUTES.get(route, route), 'capital': capital,
@@ -175,7 +176,8 @@ def evaluate_cycle(route, books, fees, withdrawals, capital, margin=0.0,
     for mode in ('taker', 'maker'):
         try:
             chain = build_chain(route, books, fees, withdrawals, mode, trading_mode, prefunded)
-            report = analyse(chain, capital, 0 if prefunded else margin, limit)
+            report = analyse(chain, capital, 0 if prefunded else margin, limit,
+                            envelope=envelope)
             report['trading_mode'] = trading_mode
             report['fee_mode'] = mode
             report['safety_status'] = _safety(report, margin, prefunded)
@@ -192,7 +194,8 @@ def evaluate_cycle(route, books, fees, withdrawals, capital, margin=0.0,
                             'trading_mode': trading_mode, 'fee_mode': mode}
     try:
         gross = analyse(build_chain(route, books, fees, withdrawals, 'taker', 'prefunded',
-                                    prefunded, gross=True), capital, 0, limit)
+                                    prefunded, gross=True), capital, 0, limit,
+                        envelope=False)
         result['gross_pct'] = gross.get('profit_pct') if gross.get('ok') else None
         result['gross_detail'] = gross
     except (UnknownFee, ChainError, InsufficientDepth):

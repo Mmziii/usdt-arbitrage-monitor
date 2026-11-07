@@ -8,6 +8,7 @@ class Storage:
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS history (timestamp REAL, wallex_bid REAL, wallex_ask REAL, nobitex_bid REAL, nobitex_ask REAL, spread_a REAL, spread_b REAL, source TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY, value TEXT)')
+        self.init_ui()
 
     def connect(self):
         return sqlite3.connect(self.path)
@@ -29,6 +30,35 @@ class Storage:
         with self.connect() as db:
             db.row_factory = sqlite3.Row
             return [dict(r) for r in db.execute('SELECT * FROM (SELECT rowid,* FROM history ORDER BY rowid DESC LIMIT ?) ORDER BY rowid', (limit,))]
+
+    def init_ui(self):
+        with self.connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS ui_state (key TEXT PRIMARY KEY, value TEXT)')
+            db.execute('''CREATE TABLE IF NOT EXISTS simulations (
+                id INTEGER PRIMARY KEY, created REAL, key TEXT, coin TEXT, route TEXT,
+                route_label TEXT, mode TEXT, capital REAL, unit TEXT, expected_final REAL,
+                expected_profit REAL, expected_pct REAL, prices TEXT, transfer_minutes REAL,
+                due REAL, status TEXT, actual_final REAL, actual_profit REAL, actual_pct REAL,
+                difference REAL, completed REAL, note TEXT)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS journal (
+                id INTEGER PRIMARY KEY, date TEXT, coin TEXT, route TEXT, mode TEXT,
+                capital REAL, final_amount REAL, profit REAL, fees TEXT, note TEXT,
+                created REAL)''')
+
+    def ui_state(self):
+        with self.connect() as db:
+            return {key: json.loads(value) for key, value in
+                    db.execute('SELECT key, value FROM ui_state').fetchall()}
+
+    def save_ui_state(self, values):
+        with self.connect() as db:
+            for key, value in values.items():
+                db.execute('INSERT OR REPLACE INTO ui_state VALUES (?,?)',
+                           (key, json.dumps(value)))
+
+    def pinned_coins(self):
+        pins = self.ui_state().get('pins', [])
+        return [str(coin) for coin in pins] if isinstance(pins, list) else []
 
     def init_scanner(self):
         with self.connect() as db:
@@ -67,6 +97,59 @@ class Storage:
         with self.connect() as db:
             db.execute('DELETE FROM scan_history WHERE timestamp < ?', (cutoff,))
             db.execute('DELETE FROM history WHERE timestamp < ?', (cutoff,))
+
+    def simulations(self, limit=200):
+        with self.connect() as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute(
+                'SELECT * FROM simulations ORDER BY id DESC LIMIT ?', (limit,))]
+
+    def simulation(self, simulation_id):
+        with self.connect() as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute('SELECT * FROM simulations WHERE id=?', (simulation_id,)).fetchone()
+            return dict(row) if row else None
+
+    def add_simulation(self, values):
+        keys = list(values)
+        with self.connect() as db:
+            cursor = db.execute(
+                'INSERT INTO simulations (' + ','.join(keys) + ') VALUES (' +
+                ','.join('?' * len(keys)) + ')', tuple(values[key] for key in keys))
+            return cursor.lastrowid
+
+    def update_simulation(self, simulation_id, values):
+        keys = list(values)
+        with self.connect() as db:
+            db.execute('UPDATE simulations SET ' + ','.join(key + '=?' for key in keys) +
+                       ' WHERE id=?', tuple(values[key] for key in keys) + (simulation_id,))
+
+    def pending_simulations(self):
+        with self.connect() as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM simulations WHERE status='pending' ORDER BY id")]
+
+    def journal(self):
+        with self.connect() as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute('SELECT * FROM journal ORDER BY date DESC, id DESC')]
+
+    def add_journal(self, values):
+        keys = list(values)
+        with self.connect() as db:
+            cursor = db.execute('INSERT INTO journal (' + ','.join(keys) + ') VALUES (' +
+                                ','.join('?' * len(keys)) + ')',
+                                tuple(values[key] for key in keys))
+            return cursor.lastrowid
+
+    def delete_journal(self, entry_id):
+        with self.connect() as db:
+            db.execute('DELETE FROM journal WHERE id=?', (entry_id,))
+
+    def delete_simulation(self, simulation_id):
+        with self.connect() as db:
+            db.execute('DELETE FROM simulations WHERE id=?', (simulation_id,))
 
     def scan_history(self, coin=None, quote=None, limit=1000):
         query = 'SELECT * FROM scan_history WHERE (? IS NULL OR coin=?) AND (? IS NULL OR quote=?) ORDER BY timestamp DESC LIMIT ?'

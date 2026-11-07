@@ -26,7 +26,12 @@ def levels(rows, divisor=1, objects=False):
     return result
 
 
-def parse_book(name, data):
+def parse_book(name, data, max_age=120, clock_skew=None):
+    """Legacy USDT/IRT parser for the classic dashboard.
+
+    ``max_age`` is configurable and the age rule is skipped when the local clock is known
+    to be skewed (the exchange timestamp cannot be judged from a wrong laptop clock).
+    """
     if name == 'wallex':
         if data.get('success') is not True:
             raise ValueError('Wallex unsuccessful response')
@@ -38,9 +43,15 @@ def parse_book(name, data):
             raise ValueError('Nobitex unsuccessful response')
         # IRT market in Nobitex public API is denominated in RIAL, not toman.
         asks, bids = levels(data['asks'], 10), levels(data['bids'], 10)
-        updated = float(data['lastUpdate']) / 1000
-        if not math.isfinite(updated) or abs(time.time() - updated) > 120:
-            raise ValueError('Stale exchange order book')
+        raw = data.get('lastUpdate')
+        if raw is None:
+            updated = time.time()
+        else:
+            updated = float(raw) / 1000
+            reliable = math.isfinite(updated)
+            skewed = clock_skew is not None and abs(clock_skew) > 60
+            if reliable and not skewed and time.time() - updated > max_age:
+                raise ValueError('Stale exchange order book')
     asks.sort()
     bids.sort(reverse=True)
     if bids[0][0] > asks[0][0]:
@@ -48,11 +59,21 @@ def parse_book(name, data):
     return Book(asks, bids, updated)
 
 
-async def fetch_book(client, name):
+async def fetch_book(client, name, gateway=None, max_age=120):
     if name == 'wallex':
         url = 'https://api.wallex.ir/v1/depth?symbol=USDTTMN'
     else:
         url = 'https://apiv2.nobitex.ir/v3/orderbook/USDTIRT'
+    if gateway is not None:
+        from .net import Endpoint
+        skew = (gateway.monitor.clock_state.get(name) or {}).get('skew_seconds')
+        result = await gateway.fetch(client, name, Endpoint('depth', url),
+                                     lambda data: parse_book(name, data, max_age, skew),
+                                     budget_name=name)
+        if not result.ok:
+            from .net import ExchangeError
+            raise ExchangeError(result)
+        return result.data
     response = await client.get(url)
     response.raise_for_status()
-    return parse_book(name, response.json())
+    return parse_book(name, response.json(), max_age)

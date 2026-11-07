@@ -32,8 +32,9 @@ def quotes(w, n, markets, now):
 
 
 class Scanner:
-    def __init__(self, store):
+    def __init__(self, store, gateway=None):
         self.store = store
+        self.gateway = gateway
         self.store.init_scanner()
         self.markets, self.excluded, self.tickers, self.depth = [], [], {}, {}
         self.market_time = 0
@@ -51,7 +52,14 @@ class Scanner:
         saved.pop('trading_overrides', None)  # Ignore legacy per-coin fees.
         return {'interval': 10, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, 'trading_mode': 'transfer', 'row_modes': {}, 'safety_margin': .3, 'coin_margins': {}, 'transfer_minutes': {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}, 'balances': {}, 'rebalance_trades': 10, 'close_confirmations': 2, 'depth_interval': 5, 'hot_rows': 20, 'sort_hysteresis_pct': .05, 'stale_seconds': 120, 'paused': False, 'conversion_source': 'auto', 'show_gross_only': True, **saved}
 
-    async def request(self, client, name, url):
+    async def request(self, client, name, url, endpoint_id='classic', budget_name=None):
+        if self.gateway is not None:
+            from .net import Endpoint, ExchangeError
+            result = await self.gateway.fetch(client, name, Endpoint(endpoint_id, url),
+                                              budget_name=budget_name or name)
+            if not result.ok:
+                raise ExchangeError(result)
+            return result.data
         async with self.semaphores[name]:
             for attempt in range(3):
                 async with self.budget_locks[name]:
@@ -80,7 +88,9 @@ class Scanner:
     async def scan(self, client, refresh=False):
         async with self.lock:
             try:
-                w, n = await asyncio.gather(*(self.request(client, name, url) for name, url in URLS.items()))
+                budgets = {'wallex': 'wallex:stats', 'nobitex': 'nobitex:stats'}
+                w, n = await asyncio.gather(*(self.request(client, name, url, 'stats', budgets[name])
+                                              for name, url in URLS.items()))
                 if refresh or not self.markets or time.time() - self.market_time >= 21600:
                     markets, excluded = intersection(wallex_markets(w), nobitex_markets(n))
                     self.markets, self.excluded, self.market_time = markets, excluded, time.time()
@@ -115,7 +125,8 @@ class Scanner:
         urls = {'wallex': 'https://api.wallex.ir/v1/depth?symbol=' + market['wallex'], 'nobitex': 'https://apiv2.nobitex.ir/v3/orderbook/' + market['nobitex']}
         key = (coin, quote)
         try:
-            data = await asyncio.gather(*(self.request(client, name, url) for name, url in urls.items()))
+            data = await asyncio.gather(*(self.request(client, name, url, 'depth', name)
+                                          for name, url in urls.items()))
             # Existing parser divides Nobitex prices by ten; compensate on USDT books.
             w = parse_book('wallex', data[0]); n = parse_book('nobitex', data[1])
             if quote == 'USDT':

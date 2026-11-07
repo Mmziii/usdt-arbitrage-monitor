@@ -216,7 +216,7 @@ def _ladder(low, high, count=24):
     return points
 
 
-def analyse(chain, capital, margin=0.0, limit=None, points_limit=600):
+def analyse(chain, capital, margin=0.0, limit=None, points_limit=600, envelope=True):
     """Evaluate one capital and the size envelope of the whole chain.
 
     All breakpoints of every stage are mapped back to the starting capital, so the profit
@@ -239,7 +239,7 @@ def analyse(chain, capital, margin=0.0, limit=None, points_limit=600):
         upper = min(upper, limit)
     low = chain.minimum_capital()
     points = set()
-    if math.isfinite(upper) and upper > 0:
+    if envelope and math.isfinite(upper) and upper > 0:
         points.update(chain.breakpoints(upper, points_limit))
         points.update(_ladder(max(low, 1e-9), upper))
     if low > 0:
