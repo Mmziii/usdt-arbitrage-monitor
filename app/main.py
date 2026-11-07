@@ -20,6 +20,7 @@ from .storage import Storage
 from .scanner import Scanner
 from .symbols import normalize
 from .fees import parse_pasted_fees
+from .tiers import Tier, active_fees, parse_tiers, export_tiers
 from typing import Optional, Literal
 
 load_dotenv()
@@ -43,8 +44,11 @@ class Settings(BaseModel):
     wallex_usdt: TradingFees = TradingFees(maker=.25, taker=.3)
     nobitex_usdt: TradingFees = TradingFees(maker=.25, taker=.25)
 
+    fee_tiers: list[Tier] = []
+    current_tiers: dict[str, str] = {}
+
     def trading_fees(self, exchange, quote):
-        return getattr(self, exchange if quote == 'toman' else exchange + '_usdt').model_dump()
+        return {k: v for k, v in active_fees(self, exchange, quote).items() if k in ('maker', 'taker')}
 
 
 settings = Settings(**store.settings({'refresh_seconds': int(os.getenv('REFRESH_SECONDS', '10'))}))
@@ -277,3 +281,24 @@ def scanner_history_csv(coin: Optional[str] = None, quote: Optional[str] = None)
     writer = csv.DictWriter(stream, fieldnames=columns); writer.writeheader()
     writer.writerows(scanner.store.scan_history(coin, quote, 1000000))
     return Response('\ufeff' + stream.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': 'attachment; filename=market-history.csv'})
+
+
+@app.get('/api/tiers/export')
+def tiers_export(format: Literal['json', 'csv'] = 'json'):
+    return Response(export_tiers(settings.fee_tiers, format), media_type='application/json' if format == 'json' else 'text/csv', headers={'Content-Disposition': f'attachment; filename=fee-tiers.{format}'})
+
+
+class TierImport(BaseModel):
+    text: str = Field(max_length=200000)
+    format: Literal['json', 'csv'] = 'json'
+
+
+@app.post('/api/tiers/import')
+def tiers_import(value: TierImport):
+    try:
+        tiers = parse_tiers(value.text, value.format)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+    updated = settings.model_copy(update={'fee_tiers': tiers})
+    put_settings(updated)
+    return settings
