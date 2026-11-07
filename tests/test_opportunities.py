@@ -38,3 +38,11 @@ def test_statistics():
     assert s['median_seconds'] == 20
     assert s['p90_seconds'] == 28
     assert round(s['shorter_than_transfer_pct']) == 67
+
+
+def test_active_markets_for_restart(tmp_path):
+    t = OpportunityTracker(Storage(str(tmp_path/'restart.db')))
+    t.observe(row(1,1),1)
+    assert t.active_markets() == {('BTC','USDT')}
+    t.observe(row(-1,2),2,confirmations=1)
+    assert t.active_markets() == set()

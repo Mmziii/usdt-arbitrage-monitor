@@ -63,6 +63,10 @@ class OpportunityTracker:
         for row in rows:
             self.observe(row, timestamp, confirmations, known)
 
+    def active_markets(self):
+        with self.store.connect() as db:
+            return set(db.execute('SELECT DISTINCT coin,quote FROM opportunities WHERE end IS NULL'))
+
     def rows(self, coin=None, mode=None):
         with self.store.connect() as db:
             import sqlite3

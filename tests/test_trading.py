@@ -55,3 +55,13 @@ def test_multilevel_exact_capital_limits():
     r = capital_limits([(10, 10)], [(12, 10)], 0, 0)
     assert r['limited_by_visible_depth']
     assert r['max_profitable_capital'] is None
+
+
+def test_sell_breakpoints_margin_and_exact_minimum():
+    r = capital_limits([(10, 100)], [(12, 10), (8, 90)], 0, 0, margin=10)
+    # First 100 earns 20; beyond that safety-adjusted profit loses .3 per quote.
+    assert r['max_profitable_capital'] == pytest.approx(100+10/.3)
+    assert r['profit_maximizing_capital'] == 100
+    r = capital_limits([(10, 10)], [(12, 10)], 0, 0, minimum=10)
+    assert r['profit_maximizing_capital'] == 100
+    assert r['limited_by_visible_depth']

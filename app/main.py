@@ -92,6 +92,7 @@ async def scan_loop():
     async with httpx.AsyncClient(timeout=8, headers={'User-Agent': 'TraderBot/USDTMonitor-1.0'}) as client:
         while True:
             try:
+                scanner.tracked_markets = tracker.active_markets()
                 await scanner.scan(client)
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 pass

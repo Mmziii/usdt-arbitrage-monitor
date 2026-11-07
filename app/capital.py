@@ -38,7 +38,7 @@ def capital_limits(asks, bids, bf, sf, withdrawal=0, minimum=0, margin=0,
         if c is not None and c <= upper:
             knots.add(c)
     lower = cost_for_quantity(max(minimum, withdrawal) / factor, asks)
-    if lower is None or lower >= upper:
+    if lower is None or lower > upper or (lower == upper and minimum <= withdrawal):
         return dict(max_profitable_capital=None, profit_maximizing_capital=None, limited_by_visible_depth=False)
     knots.add(lower)
     points = []
@@ -46,14 +46,17 @@ def capital_limits(asks, bids, bf, sf, withdrawal=0, minimum=0, margin=0,
         if c < lower:
             continue
         try:
-            profit = outcome(c, asks, bids, bf, sf, withdrawal, minimum)['profit'] if c > lower or (c > 0 and minimum > withdrawal) else -c
+            if c > lower or (c > 0 and minimum > withdrawal):
+                profit = outcome(c, asks, bids, bf, sf, withdrawal, minimum)['profit']
+            else:
+                profit = -c  # Limiting value at zero sale quantity.
         except ValueError:
             continue
         points.append((c, profit))
     if not points:
         return dict(max_profitable_capital=None, profit_maximizing_capital=None, limited_by_visible_depth=False)
     best = max(points, key=lambda p: p[1])
-    last = None
+    last = points[0][0] if points[0][1] > points[0][0] * margin / 100 else None
     for (a, pa), (b, pb) in zip(points, points[1:]):
         ya, yb = pa - a * margin / 100, pb - b * margin / 100
         if yb > 0:

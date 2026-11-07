@@ -76,3 +76,34 @@ def test_stats_read_only_and_retention(client):
 def test_invalid_policy_rejected(client, changes):
     cfg = client.get('/api/scanner/settings').json(); cfg.update(changes)
     assert client.put('/api/scanner/settings',json=cfg).status_code == 422
+
+
+def test_capital_analysis_survives_insufficient_selected_capital(client):
+    seed(main.scanner)
+    cfg = main.scanner.config(); cfg.update(trading_mode='prefunded',capital_usdt=100000)
+    main.scanner.store.save_scanner_settings(cfg)
+    row = client.get('/api/scanner').json()['rows'][0]
+    assert row['status'] == 'insufficient depth'
+    assert 'taker' not in row
+    assert row['capital_analysis']['taker']['profit_maximizing_capital'] is not None
+
+
+def test_negative_raw_spread_active_market_is_revisited(client, monkeypatch):
+    import asyncio
+    from app import scanner as scanner_module
+    scanner = main.scanner
+    seed(scanner)
+    scanner.market_time = time.time()
+    scanner.tracked_markets = {('BTC','USDT')}
+    scanner.depth = {}  # Simulate restart: only the persisted active event is known.
+    quotes = {('BTC','USDT'): dict(wallex_ask=10,wallex_bid=9,nobitex_ask=12,nobitex_bid=8,timestamp=time.time())}
+    monkeypatch.setattr(scanner_module, 'quotes', lambda *args: quotes)
+    async def request(*args):
+        return {}
+    called=[]
+    async def fetch(*args):
+        called.append(args[1:])
+    monkeypatch.setattr(scanner,'request',request)
+    monkeypatch.setattr(scanner,'fetch_depth',fetch)
+    asyncio.run(scanner.scan(None))
+    assert called == [('BTC','USDT')]

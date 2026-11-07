@@ -8,7 +8,7 @@ from .markets import wallex_markets, nobitex_markets, intersection
 from .fetchers import parse_book
 from .fees import resolve
 from .calculation import InsufficientDepth
-from .trading import evaluate, transfer_time
+from .trading import evaluate, transfer_time, analyze_capital
 from .tiers import active_fees
 
 URLS = {'wallex': 'https://api.wallex.ir/v1/markets', 'nobitex': 'https://apiv2.nobitex.ir/market/stats'}
@@ -38,6 +38,7 @@ class Scanner:
         self.markets, self.excluded, self.tickers, self.depth = [], [], {}, {}
         self.market_time = 0
         self.depth_errors = {}
+        self.tracked_markets = set()
         self.error = None
         self.depth_cursor = 0
         self.lock = asyncio.Lock()
@@ -93,7 +94,7 @@ class Scanner:
                 self.store.scan_record(samples, self.config()['retention_days'])
                 # Cap work to two markets; revisit previously observed depth even after raw spread turns negative.
                 candidates = [(max(q['nobitex_bid']/q['wallex_ask'], q['wallex_bid']/q['nobitex_ask']), key) for key, q in self.tickers.items() if 'error' not in q]
-                candidates = sorted((item for item in candidates if item[0] > 1 or item[1] in self.depth), reverse=True)
+                candidates = sorted((item for item in candidates if item[0] > 1 or item[1] in self.depth or item[1] in self.depth_errors or item[1] in self.tracked_markets), reverse=True)
                 if candidates:
                     start = self.depth_cursor % len(candidates)
                     selected = (candidates[start:] + candidates[:start])[:2]
@@ -158,9 +159,13 @@ class Scanner:
                             row['status'] = 'stale'
                         else:
                             row['liquidity'] = min(sum(p*v for p,v in book[src].asks), sum(p*v for p,v in book[dst].bids))
+                            row['capital_analysis'] = {}
                             for mode in ('taker','maker'):
                                 source_fees = {**settings.trading_fees(src, quote), 'withdrawal': fee.get('withdrawal') or 0, 'minimum': fee.get('minimum') or 0}
                                 dest_fees = settings.trading_fees(dst, quote)
+                                row['capital_analysis'][mode] = analyze_capital(book[src], book[dst], source_fees, dest_fees, mode,
+                                    trading_mode, cfg['coin_margins'].get(coin, cfg['safety_margin']),
+                                    cfg['balances'].get(src, {}).get(quote), cfg['balances'].get(dst, {}).get(coin))
                                 try:
                                     coin_reset = resolve(fees, coin, dst, cfg['networks'].get(coin))
                                     quote_reset = resolve(fees, 'USDT' if quote == 'USDT' else 'TOMAN', src, cfg['networks'].get('USDT' if quote == 'USDT' else 'TOMAN'))

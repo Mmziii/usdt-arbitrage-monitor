@@ -22,9 +22,8 @@ def evaluate(capital, source, destination, source_fees, destination_fees, liquid
     result.update(capital=capital, trading_mode=trading_mode, safety_margin=0 if prefunded else margin,
                   safety_status='profitable' if result['profit_pct'] > (0 if prefunded else margin) else 'below safety margin' if result['profit'] > 0 else 'unprofitable',
                   balances_unlimited=quote_balance is None and coin_balance is None)
-    result.update(capital_limits(source.asks, destination.bids, sf[liquidity]/100,
-                                destination_fees[liquidity]/100, sf['withdrawal'], sf.get('minimum', 0),
-                                0 if prefunded else margin, quote_balance if prefunded else None, coin_balance if prefunded else None))
+    result.update(analyze_capital(source, destination, source_fees, destination_fees, liquidity,
+                                  trading_mode, margin, quote_balance, coin_balance))
     if result['breakeven_capital'] is not None and result['breakeven_capital'] > result.get('visible_capital', 0):
         result['breakeven_capital'] = None
     if prefunded:
@@ -45,3 +44,14 @@ def transfer_time(config, network):
     value = table.get(network)
     return {'minutes': value if value is not None else table.get('default'), 'estimated': True,
             'uses_default': value is None}
+
+
+def analyze_capital(source, destination, source_fees, destination_fees, liquidity,
+                    trading_mode='transfer', margin=.3, quote_balance=None, coin_balance=None):
+    prefunded = trading_mode == 'prefunded'
+    return capital_limits(source.asks, destination.bids, source_fees[liquidity]/100,
+                          destination_fees[liquidity]/100,
+                          0 if prefunded else source_fees['withdrawal'],
+                          0 if prefunded else source_fees.get('minimum', 0),
+                          0 if prefunded else margin,
+                          quote_balance if prefunded else None, coin_balance if prefunded else None)
