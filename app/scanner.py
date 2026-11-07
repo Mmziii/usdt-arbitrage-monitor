@@ -7,7 +7,9 @@ import httpx
 from .markets import wallex_markets, nobitex_markets, intersection
 from .fetchers import parse_book
 from .fees import resolve
-from .calculation import calculate, InsufficientDepth
+from .calculation import InsufficientDepth
+from .trading import evaluate, transfer_time, analyze_capital
+from .tiers import active_fees
 
 URLS = {'wallex': 'https://api.wallex.ir/v1/markets', 'nobitex': 'https://apiv2.nobitex.ir/market/stats'}
 
@@ -36,6 +38,7 @@ class Scanner:
         self.markets, self.excluded, self.tickers, self.depth = [], [], {}, {}
         self.market_time = 0
         self.depth_errors = {}
+        self.tracked_markets = set()
         self.error = None
         self.depth_cursor = 0
         self.lock = asyncio.Lock()
@@ -46,7 +49,7 @@ class Scanner:
     def config(self):
         saved = self.store.scanner_settings()
         saved.pop('trading_overrides', None)  # Ignore legacy per-coin fees.
-        return {'interval': 30, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, **saved}
+        return {'interval': 30, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, 'trading_mode': 'transfer', 'row_modes': {}, 'safety_margin': .3, 'coin_margins': {}, 'transfer_minutes': {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}, 'balances': {}, 'rebalance_trades': 10, 'close_confirmations': 2, **saved}
 
     async def request(self, client, name, url):
         async with self.semaphores[name]:
@@ -89,9 +92,9 @@ class Scanner:
                     if 'error' not in q:
                         samples.append((now, coin, quote, q['wallex_bid'], q['wallex_ask'], q['nobitex_bid'], q['nobitex_ask'], (q['nobitex_bid']/q['wallex_ask']-1)*100, (q['wallex_bid']/q['nobitex_ask']-1)*100))
                 self.store.scan_record(samples, self.config()['retention_days'])
-                # Cap automatic depth work to two promising markets per cycle.
+                # Cap work to two markets; revisit previously observed depth even after raw spread turns negative.
                 candidates = [(max(q['nobitex_bid']/q['wallex_ask'], q['wallex_bid']/q['nobitex_ask']), key) for key, q in self.tickers.items() if 'error' not in q]
-                candidates = sorted((item for item in candidates if item[0] > 1), reverse=True)
+                candidates = sorted((item for item in candidates if item[0] > 1 or item[1] in self.depth or item[1] in self.depth_errors or item[1] in self.tracked_markets), reverse=True)
                 if candidates:
                     start = self.depth_cursor % len(candidates)
                     selected = (candidates[start:] + candidates[:start])[:2]
@@ -133,7 +136,13 @@ class Scanner:
             coin, quote = market['coin'], market['quote']; q = self.tickers.get((coin, quote), {})
             for src, dst in [('wallex','nobitex'), ('nobitex','wallex')]:
                 row = {'coin': coin, 'quote': quote, 'source': src, 'destination': dst, **q, 'rate': rate or None}
+                key = ':'.join((coin, quote, src, dst))
+                trading_mode = cfg['row_modes'].get(key, cfg['trading_mode'])
                 fee = resolve(fees, coin, src, cfg['networks'].get(coin)); row.update(fee)
+                row.update(row_key=key, trading_mode=trading_mode, transfer_time=transfer_time(cfg, fee.get('network')))
+                if trading_mode == 'prefunded':
+                    row['status'] = 'ok'  # No network support is needed for simultaneous trades.
+                row['fee_sources'] = {n: active_fees(settings, n, quote)['fee_source'] for n in (src, dst)}
                 book = self.depth.get((coin, quote))
                 if not q or 'error' in q:
                     row['status'] = 'error'
@@ -150,11 +159,21 @@ class Scanner:
                             row['status'] = 'stale'
                         else:
                             row['liquidity'] = min(sum(p*v for p,v in book[src].asks), sum(p*v for p,v in book[dst].bids))
+                            row['capital_analysis'] = {}
                             for mode in ('taker','maker'):
-                                source_fees = {**settings.trading_fees(src, quote), 'withdrawal': fee['withdrawal'], 'minimum': fee['minimum']}
+                                source_fees = {**settings.trading_fees(src, quote), 'withdrawal': fee.get('withdrawal') or 0, 'minimum': fee.get('minimum') or 0}
                                 dest_fees = settings.trading_fees(dst, quote)
+                                row['capital_analysis'][mode] = analyze_capital(book[src], book[dst], source_fees, dest_fees, mode,
+                                    trading_mode, cfg['coin_margins'].get(coin, cfg['safety_margin']),
+                                    cfg['balances'].get(src, {}).get(quote), cfg['balances'].get(dst, {}).get(coin))
                                 try:
-                                    row[mode] = calculate(cfg['capital_toman' if quote == 'toman' else 'capital_usdt'], book[src], book[dst], source_fees, dest_fees, mode)
+                                    coin_reset = resolve(fees, coin, dst, cfg['networks'].get(coin))
+                                    quote_reset = resolve(fees, 'USDT' if quote == 'USDT' else 'TOMAN', src, cfg['networks'].get('USDT' if quote == 'USDT' else 'TOMAN'))
+                                    row[mode] = evaluate(cfg['capital_toman' if quote == 'toman' else 'capital_usdt'], book[src], book[dst], source_fees, dest_fees, mode,
+                                        trading_mode, cfg['coin_margins'].get(coin, cfg['safety_margin']),
+                                        cfg['balances'].get(src, {}).get(quote), cfg['balances'].get(dst, {}).get(coin),
+                                        cfg['rebalance_trades'], coin_reset.get('withdrawal') if coin_reset['status'] == 'ok' else None,
+                                        quote_reset.get('withdrawal') if quote_reset['status'] == 'ok' else None)
                                 except (ValueError, ZeroDivisionError) as e:
                                     row['status'] = 'insufficient depth' if isinstance(e, InsufficientDepth) else 'error'
                                     row['error'] = str(e)

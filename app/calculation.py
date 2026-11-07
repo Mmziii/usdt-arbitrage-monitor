@@ -45,6 +45,10 @@ def outcome(capital, asks, bids, buy_fee, sell_fee, withdrawal, minimum=0):
 def breakeven(asks, bids, bf, sf, withdrawal, minimum=0):
     # Profit is piecewise linear. Include every buy and sell depth boundary;
     # unlike a binary search this also finds profitable windows before deeper losses.
+    if withdrawal == 0 and minimum == 0 and asks and bids:
+        # With no fixed cost the first linear segment starts at the origin.
+        if bids[0][0] / asks[0][0] * (1-bf) * (1-sf) >= 1:
+            return 0.0
     knots = [0.0]
     total, quantity = 0.0, 0.0
     for p, q in asks:

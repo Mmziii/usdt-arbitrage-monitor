@@ -12,14 +12,17 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .fetchers import Book, fetch_book
 from .calculation import calculate
 from .storage import Storage
 from .scanner import Scanner
 from .symbols import normalize
-from .fees import parse_pasted_fees
+from .fees import parse_pasted_fees, resolve
+from .tiers import Tier, active_fees, parse_tiers, export_tiers
+from .opportunities import OpportunityTracker, statistics
+from .trading import transfer_time, evaluate
 from typing import Optional, Literal
 
 load_dotenv()
@@ -43,14 +46,26 @@ class Settings(BaseModel):
     wallex_usdt: TradingFees = TradingFees(maker=.25, taker=.3)
     nobitex_usdt: TradingFees = TradingFees(maker=.25, taker=.25)
 
+    fee_tiers: list[Tier] = []
+    current_tiers: dict[str, str] = {}
+
+    @model_validator(mode='after')
+    def unique_tiers(self):
+        keys = [(t.exchange, t.quote, t.name) for t in self.fee_tiers]
+        if len(keys) != len(set(keys)):
+            raise ValueError('سطح تکراری')
+        return self
+
+
     def trading_fees(self, exchange, quote):
-        return getattr(self, exchange if quote == 'toman' else exchange + '_usdt').model_dump()
+        return {k: v for k, v in active_fees(self, exchange, quote).items() if k in ('maker', 'taker')}
 
 
 settings = Settings(**store.settings({'refresh_seconds': int(os.getenv('REFRESH_SECONDS', '10'))}))
 books, errors, manual = {}, {}, {}
 wake = asyncio.Event()
 scanner = Scanner(store)
+tracker = OpportunityTracker(store)
 
 
 async def poll():
@@ -77,10 +92,14 @@ async def scan_loop():
     async with httpx.AsyncClient(timeout=8, headers={'User-Agent': 'TraderBot/USDTMonitor-1.0'}) as client:
         while True:
             try:
+                scanner.tracked_markets = tracker.active_markets()
                 await scanner.scan(client)
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 pass
-            scanner.store.prune(scanner.config()['retention_days'])
+            cfg = scanner.config()
+            tracker.cycle(scanner.rows(settings), time.time(), cfg['close_confirmations'], known=scanner.error is None)
+            tracker.prune(time.time()-cfg['retention_days']*86400)
+            scanner.store.prune(cfg['retention_days'])
             await asyncio.sleep(scanner.config()['interval'])
 
 
@@ -148,7 +167,17 @@ def snapshot(capital: float = 10000000):
             for mode in ('maker', 'taker'):
                 row = {'source': src, 'destination': dst, 'mode': mode}
                 try:
-                    row.update(calculate(capital, active[src], active[dst], getattr(settings, src).model_dump(), getattr(settings, dst).model_dump(), mode))
+                    cfg = scanner.config()
+                    trading_mode = cfg['row_modes'].get(':'.join(('USDT', 'toman', src, dst)), cfg['trading_mode'])
+                    coin_reset = resolve(scanner.store.fees(), 'USDT', dst, cfg['networks'].get('USDT'))
+                    quote_reset = resolve(scanner.store.fees(), 'TOMAN', src, cfg['networks'].get('TOMAN'))
+                    row.update(evaluate(capital, active[src], active[dst],
+                        {**settings.trading_fees(src, 'toman'), 'withdrawal': getattr(settings, src).withdrawal}, settings.trading_fees(dst, 'toman'), mode,
+                        trading_mode, cfg['coin_margins'].get('USDT', cfg['safety_margin']), cfg['balances'].get(src, {}).get('toman'),
+                        cfg['balances'].get(dst, {}).get('USDT'), cfg['rebalance_trades'],
+                        coin_reset.get('withdrawal') if coin_reset['status'] == 'ok' else None,
+                        quote_reset.get('withdrawal') if quote_reset['status'] == 'ok' else None))
+                    row['fee_sources'] = {n: active_fees(settings, n, 'toman')['fee_source'] for n in (src,dst)}
                 except ValueError as exc:
                     row['error'] = str(exc)
                 rows.append(row)
@@ -188,6 +217,25 @@ class ScannerSettings(BaseModel):
     threshold: float = Field(default=.5, ge=0, le=100, allow_inf_nan=False)
     watchlist: list[str] = []
     networks: dict[str, str] = {}
+    trading_mode: Literal['transfer', 'prefunded'] = 'transfer'
+    row_modes: dict[str, Literal['transfer', 'prefunded']] = {}
+    safety_margin: float = Field(default=.3, ge=0, le=100, allow_inf_nan=False)
+    coin_margins: dict[str, float] = {}
+    transfer_minutes: dict[str, Optional[float]] = {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}
+    balances: dict[str, dict[str, Optional[float]]] = {}
+    rebalance_trades: int = Field(default=10, ge=1, le=1000000)
+    close_confirmations: int = Field(default=2, ge=1, le=100)
+
+    @model_validator(mode='after')
+    def validate_options(self):
+        import math
+        values = list(self.coin_margins.values()) + list(self.transfer_minutes.values())
+        values += [v for balances in self.balances.values() for v in balances.values()]
+        if any(v is not None and (not math.isfinite(v) or v < 0) for v in values):
+            raise ValueError('مقادیر باید نامنفی و متناهی باشند')
+        return self
+
+
 
 
 @app.get('/overview')
@@ -277,3 +325,42 @@ def scanner_history_csv(coin: Optional[str] = None, quote: Optional[str] = None)
     writer = csv.DictWriter(stream, fieldnames=columns); writer.writeheader()
     writer.writerows(scanner.store.scan_history(coin, quote, 1000000))
     return Response('\ufeff' + stream.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': 'attachment; filename=market-history.csv'})
+
+
+@app.get('/api/tiers/export')
+def tiers_export(format: Literal['json', 'csv'] = 'json'):
+    return Response(export_tiers(settings.fee_tiers, format), media_type='application/json' if format == 'json' else 'text/csv', headers={'Content-Disposition': f'attachment; filename=fee-tiers.{format}'})
+
+
+class TierImport(BaseModel):
+    text: str = Field(max_length=200000)
+    format: Literal['json', 'csv'] = 'json'
+
+
+@app.post('/api/tiers/import')
+def tiers_import(value: TierImport):
+    try:
+        tiers = parse_tiers(value.text, value.format)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+    updated = settings.model_copy(update={'fee_tiers': tiers})
+    put_settings(updated)
+    return settings
+
+
+@app.get('/api/opportunities')
+def opportunity_stats(coin: Optional[str] = None, mode: Optional[Literal['transfer', 'prefunded']] = None, network: Optional[str] = None):
+    mode = mode or scanner.config()['trading_mode']
+    rows = tracker.rows(coin, mode)
+    minutes = transfer_time(scanner.config(), network)['minutes'] if mode == 'transfer' else None
+    return {'overall': statistics(rows, minutes), 'coins': {c: statistics([r for r in rows if r['coin'] == c], minutes) for c in sorted({r['coin'] for r in rows})}, 'transfer_minutes': minutes}
+
+
+@app.get('/api/opportunities.csv')
+def opportunity_export(coin: Optional[str] = None, mode: Optional[str] = None):
+    rows = tracker.rows(coin, mode)
+    stream = io.StringIO()
+    columns = ['id','key','coin','quote','source','destination','mode','network','start','end','duration','peak_pct','capital_at_peak','unknown_gaps']
+    writer = csv.DictWriter(stream, fieldnames=columns)
+    writer.writeheader(); writer.writerows(rows)
+    return Response('\ufeff'+stream.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': 'attachment; filename=opportunities.csv'})
