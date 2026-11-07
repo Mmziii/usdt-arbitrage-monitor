@@ -331,3 +331,35 @@ svg.chart { width: 100%; height: 230px; direction: ltr; background: var(--bg); b
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* diagnostics, panel tables and the standalone guide */
+.test-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--bg-soft); }
+.test-card h3 { margin: 0 0 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.test-card ol { margin: 0; padding-inline-start: 20px; }
+.test-card li { margin-bottom: 10px; }
+.diag-card .raw, .test-card .raw { max-height: 190px; overflow: auto; margin: 6px 0 0; }
+.error-inline { margin: 8px 0; }
+.status-ok { color: var(--green-text); border-color: var(--green); }
+.status-error { color: var(--red-text); border-color: var(--red); }
+.status-stale { color: var(--yellow-text); border-color: var(--yellow); }
+.status-unknown, .status-paused { color: var(--muted); }
+.book-block + .book-block { margin-top: 18px; }
+.book-block h3 { margin: 0 0 4px; }
+.small-summary .card { padding: 10px 12px; }
+.small-summary .big { font-size: 1.15rem; }
+td.good, .good { color: var(--green-text); }
+td.bad, .bad { color: var(--red-text); }
+button.danger, .button-link.danger { color: var(--red-text); border-color: var(--red); }
+button:disabled { opacity: .55; cursor: not-allowed; }
+.banner.ok { border-color: var(--green); color: var(--green-text); }
+
+/* standalone Persian guide (/guide) */
+.guide-page { max-width: 900px; margin: 0 auto; padding: 0 16px 40px; }
+.guide-page .topbar { margin-inline: -16px; }
+.guide { line-height: 1.9; }
+.guide h1 { margin: 16px 0 4px; }
+.guide .lead { font-size: 1.05rem; color: var(--muted); }
+.guide section { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 18px; }
+.guide h2 { font-size: 1.15rem; margin: 8px 0; }
+.guide code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; direction: ltr; display: inline-block; }
+.guide ol, .guide ul { padding-inline-start: 22px; }

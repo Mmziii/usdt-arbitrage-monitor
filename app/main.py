@@ -372,7 +372,7 @@ class ScannerSettings(BaseModel):
 
 @app.get('/overview')
 def overview_page():
-    return FileResponse(static / 'dashboard.html')
+    return FileResponse(static / 'overview.html')
 
 
 @app.get('/api/scanner/settings')
