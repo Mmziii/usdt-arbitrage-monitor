@@ -21,6 +21,8 @@ from .scanner import Scanner
 from .symbols import normalize
 from .fees import parse_pasted_fees
 from .tiers import Tier, active_fees, parse_tiers, export_tiers
+from .opportunities import OpportunityTracker, statistics
+from .trading import transfer_time
 from typing import Optional, Literal
 
 load_dotenv()
@@ -55,6 +57,7 @@ settings = Settings(**store.settings({'refresh_seconds': int(os.getenv('REFRESH_
 books, errors, manual = {}, {}, {}
 wake = asyncio.Event()
 scanner = Scanner(store)
+tracker = OpportunityTracker(store)
 
 
 async def poll():
@@ -84,7 +87,10 @@ async def scan_loop():
                 await scanner.scan(client)
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 pass
-            scanner.store.prune(scanner.config()['retention_days'])
+            cfg = scanner.config()
+            tracker.cycle(scanner.rows(settings), time.time(), cfg['close_confirmations'], known=scanner.error is None)
+            tracker.prune(time.time()-cfg['retention_days']*86400)
+            scanner.store.prune(cfg['retention_days'])
             await asyncio.sleep(scanner.config()['interval'])
 
 
@@ -321,3 +327,20 @@ def tiers_import(value: TierImport):
     updated = settings.model_copy(update={'fee_tiers': tiers})
     put_settings(updated)
     return settings
+
+
+@app.get('/api/opportunities')
+def opportunity_stats(coin: Optional[str] = None, mode: Optional[Literal['transfer', 'prefunded']] = None, network: Optional[str] = None):
+    rows = tracker.rows(coin, mode)
+    minutes = transfer_time(scanner.config(), network)['minutes'] if mode != 'prefunded' else None
+    return {'overall': statistics(rows, minutes), 'coins': {c: statistics([r for r in rows if r['coin'] == c], minutes) for c in sorted({r['coin'] for r in rows})}, 'transfer_minutes': minutes}
+
+
+@app.get('/api/opportunities.csv')
+def opportunity_export(coin: Optional[str] = None, mode: Optional[str] = None):
+    rows = tracker.rows(coin, mode)
+    stream = io.StringIO()
+    columns = ['id','key','coin','quote','source','destination','mode','network','start','end','duration','peak_pct','capital_at_peak','unknown_gaps']
+    writer = csv.DictWriter(stream, fieldnames=columns)
+    writer.writeheader(); writer.writerows(rows)
+    return Response('\ufeff'+stream.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition': 'attachment; filename=opportunities.csv'})
