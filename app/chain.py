@@ -54,6 +54,8 @@ class Stage:
 
 def buy_stage(name, label, asks, fee_pct, unit_in='quote', unit_out='coin', **meta):
     """Spend ``unit_in`` on the ask side, then deduct a percentage trading fee."""
+    if not asks:
+        raise InsufficientDepth('دفتر سفارش فروش این بازار خالی است؛ داده‌ها را دوباره دریافت کنید')
     fee = float(fee_pct) / 100.0
 
     def forward(capital):
@@ -70,6 +72,8 @@ def buy_stage(name, label, asks, fee_pct, unit_in='quote', unit_out='coin', **me
 
 
 def sell_stage(name, label, bids, fee_pct, unit_in='coin', unit_out='quote', **meta):
+    if not bids:
+        raise InsufficientDepth('دفتر سفارش خرید این بازار خالی است؛ داده‌ها را دوباره دریافت کنید')
     fee = float(fee_pct) / 100.0
 
     def forward(quantity):
