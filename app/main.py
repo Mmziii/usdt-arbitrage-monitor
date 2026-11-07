@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .fetchers import Book, fetch_book
 from .calculation import calculate
@@ -192,6 +192,25 @@ class ScannerSettings(BaseModel):
     threshold: float = Field(default=.5, ge=0, le=100, allow_inf_nan=False)
     watchlist: list[str] = []
     networks: dict[str, str] = {}
+    trading_mode: Literal['transfer', 'prefunded'] = 'transfer'
+    row_modes: dict[str, Literal['transfer', 'prefunded']] = {}
+    safety_margin: float = Field(default=.3, ge=0, le=100, allow_inf_nan=False)
+    coin_margins: dict[str, float] = {}
+    transfer_minutes: dict[str, Optional[float]] = {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}
+    balances: dict[str, dict[str, Optional[float]]] = {}
+    rebalance_trades: int = Field(default=10, ge=1, le=1000000)
+    close_confirmations: int = Field(default=2, ge=1, le=100)
+
+    @model_validator(mode='after')
+    def validate_options(self):
+        import math
+        values = list(self.coin_margins.values()) + list(self.transfer_minutes.values())
+        values += [v for balances in self.balances.values() for v in balances.values()]
+        if any(v is not None and (not math.isfinite(v) or v < 0) for v in values):
+            raise ValueError('مقادیر باید نامنفی و متناهی باشند')
+        return self
+
+
 
 
 @app.get('/overview')
