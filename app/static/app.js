@@ -1,7 +1,7 @@
 const $=id=>document.getElementById(id), names={wallex:'والکس',nobitex:'نوبیتکس'};
 const fmt=(x,d=0)=>Number(x).toLocaleString('fa-IR',{maximumFractionDigits:d});
 let config, enabled=false, audio, above=false, timer;
-async function api(url,options){const r=await fetch(url,options);if(!r.ok)throw Error('درخواست نامعتبر یا ارتباط قطع است؛ ورودی‌ها را بررسی کنید.');return r.json()}
+async function api(url,options){let r;try{r=await fetch(url,options)}catch(e){throw Error('اتصال به سرور برقرار نشد؛ مطمئن شوید برنامه باز است.')}const t=await r.text();let d=null;try{d=t?JSON.parse(t):null}catch(e){}if(!r.ok){let m=d&&typeof d.detail==='string'?d.detail:'';if(!/[\u0600-\u06ff]/.test(m))m={400:'درخواست نامعتبر بود؛ ورودی‌ها را بررسی کنید.',429:'درخواست‌های زیادی فرستاده شد؛ چند لحظه صبر کنید.',500:'خطای داخلی سرور؛ دوباره تلاش کنید.',502:'سرور پاسخ درست نداد؛ دوباره تلاش کنید.',503:'سرویس موقتاً در دسترس نیست؛ چند لحظه بعد دوباره تلاش کنید.',504:'پاسخ سرور دیر رسید؛ دوباره تلاش کنید.'}[r.status]||('خطا در ارتباط با سرور ('+r.status+')');throw Error(m)}return d}
 const json=(body)=>({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 async function showSettings(){config=await api('/api/settings');$('refresh').value=config.refresh_seconds;$('threshold').value=config.threshold;for(const n of Object.keys(names)){for(const k of ['maker','taker','withdrawal'])$(`${n}_${k}`).value=config[n][k];for(const k of ['maker','taker'])$(`${n}_usdt_${k}`).value=config[n+'_usdt'][k]}}
 $('settingsToggle').onclick=async()=>{try{if($('settings').hidden)await showSettings();$('settings').hidden=!$('settings').hidden}catch(e){$('message').textContent=e.message}};

@@ -157,8 +157,32 @@ function display(id) { return w.getComputedStyle($(id)).display; }
   // indicator text is Persian
   assert.match($('indicator').textContent, /سود|فرصت|انتظار/);
 
+  // server and network failures are explained in Persian, never with the raw HTTP text
+  const realFetch = w.fetch;
+  w.fetch = async () => ({ok: false, status: 500, text: async () => 'Internal Server Error',
+                          json: async () => ({})});
+  await $('capital').onchange();
+  await settle();
+  assert.match($('message').textContent, /خطای داخلی سرور/);
+  assert.doesNotMatch($('message').textContent, /Internal Server Error/i);
+  w.fetch = async () => ({ok: false, status: 503,
+                          text: async () => JSON.stringify({detail: 'سرویس در دسترس نیست.'}),
+                          json: async () => ({detail: 'سرویس در دسترس نیست.'})});
+  await $('capital').onchange();
+  await settle();
+  assert.match($('message').textContent, /سرویس در دسترس نیست/);
+  w.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await $('capital').onchange();
+  await settle();
+  assert.match($('message').textContent, /اتصال به سرور/);
+  assert.doesNotMatch($('message').textContent, /Failed to fetch/);
+  w.fetch = realFetch;
+  await $('capital').onchange();
+  await settle();
+  assert.equal(doc.querySelectorAll('#results tr').length, 2, 'the page recovers');
+
   assert.deepEqual(problems, [], 'no jsdom errors or unhandled rejections');
   console.log('Classic page smoke passed: settings open/save/close, capital reload, ' +
-    'manual fallback, alerts, chart and Persian messages.');
+    'manual fallback, alerts, chart and Persian messages/errors.');
   dom.window.close();
 })().catch(error => { console.error(error); if (problems.length) console.error(problems); process.exitCode = 1; });

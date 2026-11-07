@@ -466,6 +466,45 @@ function lastCall(method, url) {
   $('drawerClose').click();
   await settle();
 
+  // ------------------------------------------------------- API failure messages
+  const realFetch = w.fetch;
+  async function apiFailure(status, body, mode) {
+    w.fetch = async () => {
+      if (mode === 'network') throw new w.TypeError('Failed to fetch');
+      if (mode === 'abort') { const error = new Error('aborted'); error.name = 'AbortError'; throw error; }
+      return {ok: status >= 200 && status < 300, status, text: async () => body};
+    };
+    try {
+      return {message: null, value: await vm.runInContext("App.api('/api/overview')", ctx)};
+    } catch (error) {
+      return {message: error.message, value: null};
+    }
+  }
+  const hasPersian = text => /[\u0600-\u06ff]/.test(text || '');
+  let failure = await apiFailure(429, 'Too Many Requests');
+  assert.match(failure.message, /صبر/, '429 without a JSON body reads in Persian');
+  failure = await apiFailure(503, JSON.stringify({detail: 'سرویس در دسترس نیست؛ بعداً تلاش کنید.'}));
+  assert.equal(failure.message, 'سرویس در دسترس نیست؛ بعداً تلاش کنید.', 'server detail wins');
+  failure = await apiFailure(500, '');
+  assert.match(failure.message, /خطای داخلی سرور/);
+  failure = await apiFailure(504, '<html>gateway timeout</html>');
+  assert.match(failure.message, /دیر رسید/);
+  failure = await apiFailure(404, 'Not Found');
+  assert.match(failure.message, /پیدا نشد/);
+  failure = await apiFailure(0, '', 'network');
+  assert.match(failure.message, /اتصال به سرور/);
+  failure = await apiFailure(0, '', 'abort');
+  assert.match(failure.message, /دیر رسید/, 'a hanging request is not silent');
+  failure = await apiFailure(200, 'not json at all');
+  assert.match(failure.message, /قابل خواندن نبود/);
+  for (const message of ['درخواست‌های زیادی', 'خطای داخلی', 'دیر رسید', 'اتصال به سرور',
+                         'پیدا نشد']) {
+    assert.ok(hasPersian(message));
+  }
+  failure = await apiFailure(204, '');
+  assert.equal(failure.value, null, 'an empty 204 body is not an error');
+  w.fetch = realFetch;
+
   // -------------------------------------------------------------------- summary
   for (const id of ['wizard', 'manualDrawer', 'drawer', 'helpPop', 'menuPanel']) {
     assertHidden(id, 'closed again at the end of the run');
@@ -473,6 +512,7 @@ function lastCall(method, url) {
   assert.deepEqual(errorText, [], 'no window errors');
   assert.deepEqual(problems, [], 'no jsdom errors or unhandled rejections');
   console.log('Controls smoke passed: 20 close/dismiss paths, tabs, toggles, filters, ' +
-    'pins, presets, capital, freeze, keyboard, refresh-while-open; CSS cascade verified.');
+    'pins, presets, capital, freeze, keyboard, refresh-while-open, Persian HTTP errors; ' +
+    'CSS cascade verified.');
   dom.window.close();
 })().catch(error => { console.error(error); if (problems.length) console.error(problems); process.exitCode = 1; });

@@ -86,15 +86,74 @@
     return App.fmt(value / 3600, 1) + ' ساعت';
   };
 
+  // Persian fallbacks for failures whose body is not our JSON envelope (429, 500, a dead
+  // server, a timeout). Without them the banner showed English text such as "Failed to fetch".
+  const HTTP_TEXT = {
+    0: 'اتصال به سرور برقرار نشد؛ مطمئن شوید برنامه هنوز باز است.',
+    400: 'درخواست نامعتبر بود؛ ورودی‌ها را بررسی کنید.',
+    403: 'این درخواست مجاز نیست.',
+    404: 'این بخش پیدا نشد؛ صفحه را دوباره بارگذاری کنید.',
+    409: 'این عملیات با وضعیت فعلی سازگار نیست.',
+    429: 'درخواست‌های زیادی فرستاده شد؛ چند لحظه صبر کنید.',
+    500: 'خطای داخلی سرور؛ دوباره تلاش کنید.',
+    502: 'سرور پاسخ درست نداد؛ دوباره تلاش کنید.',
+    503: 'سرویس موقتاً در دسترس نیست؛ چند لحظه بعد دوباره تلاش کنید.',
+    504: 'پاسخ سرور دیر رسید؛ دوباره تلاش کنید.',
+  };
+  App.HTTP_TEXT = HTTP_TEXT;
+  App.API_TIMEOUT_MS = 20000;
+
+  // `errors` arrives either as text or as {exchange: text}; printing the object showed
+  // "[object Object]" where the user needed the reason.
+  App.errorSummary = function (errors) {
+    if (!errors) return '';
+    if (typeof errors === 'string') return errors.trim();
+    const parts = [];
+    if (Array.isArray(errors)) {
+      errors.forEach(function (item) {
+        const text = App.errorSummary(item);
+        if (text) parts.push(text);
+      });
+      return parts.join('، ');
+    }
+    if (typeof errors !== 'object') return String(errors);
+    Object.keys(errors).forEach(function (key) {
+      const value = errors[key];
+      const text = typeof value === 'string' ? value
+        : (value && (value.message || value.error)) || '';
+      if (text) parts.push(App.exchangeLabel(key) + ': ' + text);
+    });
+    return parts.join('، ');
+  };
+
   App.api = async function (url, options) {
-    const response = await fetch(url, options);
+    const request = Object.assign({}, options || {});
+    let timer = null;
+    if (!request.signal && typeof AbortController === 'function') {
+      const controller = new AbortController();
+      request.signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), App.API_TIMEOUT_MS);
+    }
+    const done = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    let response;
+    try {
+      response = await fetch(url, request);
+    } catch (error) {
+      done();
+      throw new Error(error && error.name === 'AbortError'
+        ? 'پاسخ سرور دیر رسید؛ دوباره تلاش کنید.' : HTTP_TEXT[0]);
+    }
+    done();
     const text = await response.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (error) { data = null; }
     if (!response.ok) {
-      const detail = data && (data.detail || data.message) ? (data.detail || data.message) : text;
-      throw new Error(typeof detail === 'string' ? detail : 'خطا در ارتباط با سرور');
+      const detail = data && (data.detail || data.message) ? (data.detail || data.message) : '';
+      const message = typeof detail === 'string' && detail.trim() ? detail
+        : (HTTP_TEXT[response.status] || ('خطا در ارتباط با سرور (' + response.status + ')'));
+      throw new Error(message);
     }
+    if (text && data === null) throw new Error('پاسخ سرور قابل خواندن نبود؛ دوباره تلاش کنید.');
     return data;
   };
 
@@ -469,7 +528,7 @@
     $('emptyState').hidden = list.length > 0;
     if (!list.length) {
       $('emptyState').textContent = App.state.loading ? 'در حال دریافت قیمت‌ها…'
-        : (data.errors ? 'دریافت داده ناموفق بود: ' + data.errors
+        : (data.errors ? 'دریافت داده ناموفق بود: ' + App.errorSummary(data.errors)
           : 'با این فیلترها ردیفی پیدا نشد. فیلترها را ساده‌تر کنید یا «به‌روزرسانی الان» را بزنید.');
     }
     if (!animate || !tbody.children.length || App.state.freeze || App.isHovering()) {
@@ -720,7 +779,8 @@
       App.renderTable(true);
       App.renderCapital();
       App.renderWizardBanner(wizard);
-      App.message(data.errors ? 'آخرین دریافت بازار با خطا مواجه شد: ' + data.errors : '');
+      App.message(data.errors ? 'آخرین دریافت بازار با خطا مواجه شد: ' +
+        App.errorSummary(data.errors) : '');
       App.schedulePolling();
     } catch (error) {
       App.error(error);

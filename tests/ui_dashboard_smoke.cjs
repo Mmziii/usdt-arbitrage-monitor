@@ -57,6 +57,10 @@ w.fetch = async function (url, options = {}) {
              status: 429, elapsed_ms: 90, message: 'درخواست‌ها زیاد است.', action: 'کمی صبر کنید.', preview: '{"success":false}'}],
     clock: {level: 'ok', message: 'ساعت درست است.', action: ''}}]};
   else if (url === '/api/simulations') value = structuredClone(fixture.simulations);
+  else if (url.startsWith('/api/simulations/')) value = {ok: true};
+  else if (url.startsWith('/api/journal/')) value = {ok: true};
+  else if (url === '/api/backup') value = {app: 'usdt-arbitrage-monitor', version: 2, fees: 3};
+  else if (url === '/api/backup/restore') value = {ok: true, fees: 3};
   else if (url === '/api/journal') {
     if (options.method === 'POST') {
       const body = JSON.parse(options.body);
@@ -229,7 +233,65 @@ function visible(id) { return doc.getElementById(id).hidden === false; }
   assert.ok(calls.some(call => call === 'POST /api/overview/pause'));
   assert.match(text('pauseButton'), /ادامه/);
 
+  // --- simulation settle and delete ---------------------------------------
+  await vm.runInContext("App.switchTab('simulations')", ctx);
+  await settle();
+  const pendingId = doc.querySelector('[data-sim-settle]').dataset.simSettle;
+  doc.querySelector('[data-sim-settle]').click();
+  await settle();
+  assert.ok(calls.some(call => call === 'POST /api/simulations/' + pendingId + '/settle'),
+    'settle button posts to the settle route');
+  doc.querySelector('[data-sim-delete]').click();
+  await settle();
+  assert.ok(calls.some(call => call.startsWith('DELETE /api/simulations/')),
+    'delete button removes the simulation');
+
+  // --- journal delete ------------------------------------------------------
+  await vm.runInContext("App.switchTab('journal')", ctx);
+  await settle();
+  doc.querySelector('[data-journal-delete]').click();
+  await settle();
+  assert.ok(calls.some(call => call.startsWith('DELETE /api/journal/')),
+    'journal rows can be removed');
+
+  // --- backup, restore and CSV links --------------------------------------
+  const backupLink = doc.querySelector('a[href="/api/backup"]');
+  const csvLink = doc.querySelector('a[href="/api/journal.csv"]');
+  assert.ok(backupLink && csvLink, 'backup and CSV download links exist');
+  const restoreInput = doc.getElementById('restoreFile');
+  assert.ok(restoreInput && restoreInput.onchange, 'the restore input is wired');
+  // jsdom's FileReader runs on window timers, which this smoke freezes; a tiny stand-in
+  // keeps the handler code (JSON parse, confirm, POST) under test.
+  vm.runInContext('window.FileReader = function () { const self = this;' +
+    ' this.readAsText = function (file) { self.result = file.__text;' +
+    ' if (self.onload) self.onload(); }; };', ctx);
+  const backup = {app: 'usdt-arbitrage-monitor', version: 2, fees: 3};
+  restoreInput.onchange({target: {files: [{__text: JSON.stringify(backup)}]}});
+  await settle(200);
+  assert.ok(calls.some(call => call === 'POST /api/backup/restore'),
+    'a backup file is posted to the restore route');
+  assert.match(text('message'), /بازگردانی/);
+  restoreInput.onchange({target: {files: [{__text: 'not json'}]}});
+  await settle(200);
+  assert.match(text('message'), /قابل خواندن نیست/);
+  assert.equal(calls.filter(call => call === 'POST /api/backup/restore').length, 1,
+    'a broken file never reaches the server');
+
+  // --- one failing exchange must not break the page ------------------------
+  const savedErrors = fixture.overview.errors;
+  fixture.overview.errors = {wallex: 'اتصال به والکس برقرار نشد؛ داده قدیمی است.'};
+  await vm.runInContext('App.load(false)', ctx);
+  await settle();
+  assert.ok(doc.querySelectorAll('#rows tr').length > 0, 'rows still render with one bad exchange');
+  assert.match(text('message'), /والکس/);
+  assert.match(text('message'), /داده قدیمی است/, 'the reason itself is shown');
+  assert.doesNotMatch(text('message'), /\[object Object\]/, 'errors are formatted, not coerced');
+  fixture.overview.errors = savedErrors;
+  await vm.runInContext('App.load(false)', ctx);
+  await settle();
+
   console.log('Dashboard DOM smoke passed: table, filters, drawer tabs, diagnostics, ' +
-    'simulations, journal, setup fees, capital presets, wizard, pause.');
+    'simulations (settle/delete), journal (add/delete), setup fees, backup/restore, ' +
+    'capital presets, wizard, pause, one failing exchange.');
   dom.window.close();
 })().catch(error => { console.error(error); process.exitCode = 1; });

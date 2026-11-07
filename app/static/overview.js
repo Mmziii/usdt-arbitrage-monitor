@@ -3,7 +3,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const num=(x,d=4)=>x==null||!Number.isFinite(x)?'—':Number(x).toLocaleString('fa-IR',{maximumFractionDigits:d});
 const statuses={'ok':'آماده','fee unknown':'کارمزد برداشت نامعلوم','minimum unknown':'حداقل برداشت نامعلوم','network unknown':'پشتیبانی شبکه نامعلوم','no common network':'شبکه مشترک ندارد','depth needed':'نیاز به عمق','stale':'داده قدیمی','error':'خطا','insufficient depth':'عمق ناکافی'};
 let config, data, fees=[], detail=null, sort='taker', reverse=true, timer, alerts=false, audio, above={};
-async function api(url,opts){const r=await fetch(url,opts);if(!r.ok){let t=await r.text();throw Error(t)}return r.json()}
+async function api(url,opts){let r;try{r=await fetch(url,opts)}catch(e){throw Error('اتصال به سرور برقرار نشد؛ مطمئن شوید برنامه باز است.')}const t=await r.text();let d=null;try{d=t?JSON.parse(t):null}catch(e){}if(!r.ok){let m=d&&typeof d.detail==='string'?d.detail:'';if(!/[\u0600-\u06ff]/.test(m))m={400:'درخواست نامعتبر بود؛ ورودی‌ها را بررسی کنید.',429:'درخواست‌های زیادی فرستاده شد؛ چند لحظه صبر کنید.',500:'خطای داخلی سرور؛ دوباره تلاش کنید.',502:'سرور پاسخ درست نداد؛ دوباره تلاش کنید.',503:'سرویس موقتاً در دسترس نیست؛ چند لحظه بعد دوباره تلاش کنید.',504:'پاسخ سرور دیر رسید؛ دوباره تلاش کنید.'}[r.status]||('خطا در ارتباط با سرور ('+r.status+')');throw Error(m)}return d}
 const put=x=>({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(x)});
 function error(e){$('message').textContent='خطا: '+e.message}
 function download(name,content,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
