@@ -7,7 +7,7 @@ from typing import Literal
 
 
 class Tier(BaseModel):
-    exchange: Literal['wallex', 'nobitex']
+    exchange: Literal['wallex', 'nobitex', 'bitunix']
     quote: Literal['toman', 'USDT']
     name: str = Field(min_length=1, max_length=80)
     threshold: float = Field(ge=0, allow_inf_nan=False)

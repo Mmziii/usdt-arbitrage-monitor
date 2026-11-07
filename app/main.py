@@ -3,6 +3,7 @@ import contextlib
 import csv
 import io
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .fetchers import Book, fetch_book
 from .calculation import calculate
@@ -38,16 +39,46 @@ class Fees(TradingFees):
     withdrawal: float = Field(ge=0, allow_inf_nan=False)
 
 
-class Settings(BaseModel):
+class OptionalTradingFees(BaseModel):
+    """Bitunix rates are shipped as *unknown*; the user must enter their real tier."""
+    maker: Optional[float] = Field(default=None, ge=0, lt=100, allow_inf_nan=False)
+    taker: Optional[float] = Field(default=None, ge=0, lt=100, allow_inf_nan=False)
+
+
+class AppSettings(BaseModel):
     refresh_seconds: int = Field(default=10, ge=5, le=3600)
     threshold: float = Field(default=.5, ge=0, le=100, allow_inf_nan=False)
     wallex: Fees = Fees(maker=.25, taker=.3, withdrawal=.8)
     nobitex: Fees = Fees(maker=.25, taker=.25, withdrawal=.7)
     wallex_usdt: TradingFees = TradingFees(maker=.25, taker=.3)
     nobitex_usdt: TradingFees = TradingFees(maker=.25, taker=.25)
+    bitunix: OptionalTradingFees = OptionalTradingFees()
+    bitunix_usdt: OptionalTradingFees = OptionalTradingFees()
+    proxy_url: Optional[str] = None
+    user_agent: str = Field(default='TraderBot/USDTMonitor-2.0 (+read-only)', min_length=3, max_length=200)
+    max_timestamp_age_seconds: int = Field(default=120, ge=10, le=3600)
+    clock_skew_warning_seconds: int = Field(default=60, ge=10, le=3600)
 
     fee_tiers: list[Tier] = []
     current_tiers: dict[str, str] = {}
+
+    @field_validator('proxy_url')
+    @classmethod
+    def valid_proxy(cls, value):
+        if value in (None, ''):
+            return None
+        value = value.strip()
+        if not re.match(r'^(https?|socks5h?|socks4)://[^\s]+$', value):
+            raise ValueError('آدرس پروکسی باید با http:// یا https:// یا socks5:// شروع شود')
+        return value
+
+    @field_validator('user_agent')
+    @classmethod
+    def valid_agent(cls, value):
+        value = value.strip()
+        if not value or '\n' in value or '\r' in value:
+            raise ValueError('User-Agent نامعتبر است')
+        return value
 
     @model_validator(mode='after')
     def unique_tiers(self):
@@ -61,7 +92,16 @@ class Settings(BaseModel):
         return {k: v for k, v in active_fees(self, exchange, quote).items() if k in ('maker', 'taker')}
 
 
-settings = Settings(**store.settings({'refresh_seconds': int(os.getenv('REFRESH_SECONDS', '10'))}))
+Settings = AppSettings
+
+_ENV_DEFAULTS = {
+    'refresh_seconds': int(os.getenv('REFRESH_SECONDS', '10')),
+    'proxy_url': os.getenv('PROXY_URL') or None,
+    'user_agent': os.getenv('USER_AGENT') or 'TraderBot/USDTMonitor-2.0 (+read-only)',
+    'max_timestamp_age_seconds': int(os.getenv('MAX_TIMESTAMP_AGE', '120')),
+    'clock_skew_warning_seconds': int(os.getenv('CLOCK_SKEW_WARNING', '60')),
+}
+settings = Settings(**{**_ENV_DEFAULTS, **(store.settings() or {})})
 books, errors, manual = {}, {}, {}
 wake = asyncio.Event()
 scanner = Scanner(store)
@@ -201,7 +241,7 @@ def export():
 
 
 class NetworkFee(BaseModel):
-    exchange: Literal['wallex', 'nobitex']
+    exchange: Literal['wallex', 'nobitex', 'bitunix']
     coin: str = Field(min_length=2, max_length=20)
     network: str = Field(min_length=1, max_length=40, pattern=r'^[A-Za-z0-9_-]+$')
     withdrawal: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
@@ -210,7 +250,14 @@ class NetworkFee(BaseModel):
 
 
 class ScannerSettings(BaseModel):
-    interval: int = Field(default=30, ge=10, le=3600)
+    interval: int = Field(default=10, ge=5, le=60)
+    depth_interval: int = Field(default=5, ge=3, le=120)
+    hot_rows: int = Field(default=20, ge=0, le=200)
+    sort_hysteresis_pct: float = Field(default=.05, ge=0, le=5, allow_inf_nan=False)
+    stale_seconds: int = Field(default=120, ge=30, le=3600)
+    paused: bool = False
+    conversion_source: Literal['auto', 'wallex', 'nobitex'] = 'auto'
+    show_gross_only: bool = True
     retention_days: int = Field(default=30, ge=1, le=3650)
     capital_toman: float = Field(default=10000000, gt=0, le=1e15, allow_inf_nan=False)
     capital_usdt: float = Field(default=100, gt=0, le=1e15, allow_inf_nan=False)

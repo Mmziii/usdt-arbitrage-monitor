@@ -49,7 +49,7 @@ class Scanner:
     def config(self):
         saved = self.store.scanner_settings()
         saved.pop('trading_overrides', None)  # Ignore legacy per-coin fees.
-        return {'interval': 30, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, 'trading_mode': 'transfer', 'row_modes': {}, 'safety_margin': .3, 'coin_margins': {}, 'transfer_minutes': {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}, 'balances': {}, 'rebalance_trades': 10, 'close_confirmations': 2, **saved}
+        return {'interval': 10, 'retention_days': 30, 'capital_toman': 10000000, 'capital_usdt': 100, 'threshold': .5, 'watchlist': [], 'networks': {}, 'trading_mode': 'transfer', 'row_modes': {}, 'safety_margin': .3, 'coin_margins': {}, 'transfer_minutes': {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}, 'balances': {}, 'rebalance_trades': 10, 'close_confirmations': 2, 'depth_interval': 5, 'hot_rows': 20, 'sort_hysteresis_pct': .05, 'stale_seconds': 120, 'paused': False, 'conversion_source': 'auto', 'show_gross_only': True, **saved}
 
     async def request(self, client, name, url):
         async with self.semaphores[name]:
