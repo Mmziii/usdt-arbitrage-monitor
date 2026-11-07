@@ -12,7 +12,7 @@ markets. Nobitex's IRT order books are published in RIAL and are divided by ten 
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from .net import Endpoint, ValidationError
 from .symbols import normalize

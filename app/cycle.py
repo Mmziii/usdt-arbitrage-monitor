@@ -25,8 +25,7 @@ the coin, sell. No toman conversion is involved.
 Unknown fees are never assumed to be zero: they block the net result (gross-only label).
 """
 import math
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from .chain import (Chain, ChainError, analyse, buy_stage, fixed_stage, sell_stage)
 from .calculation import InsufficientDepth
