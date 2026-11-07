@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>دیدبان آربیتراژ تتر و بیت‌یونیکس</title>
+<link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+<a class="skip" href="#main">رفتن به فهرست فرصت‌ها</a>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">◎</span>
+    <div>
+      <h1>دیدبان آربیتراژ</h1>
+      <p class="muted small">فقط پایش و محاسبه · بدون سفارش، بدون کلید API، بدون دسترسی به حساب</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <div id="exchangeChips" class="chips" role="group" aria-label="وضعیت اتصال صرافی‌ها"></div>
+    <div class="tools" role="group" aria-label="تنظیمات نمایش">
+      <label class="inline">اندازه متن
+        <select id="fontScale" aria-label="اندازه متن">
+          <option value="small">کوچک</option>
+          <option value="medium">متوسط</option>
+          <option value="large">بزرگ</option>
+        </select>
+      </label>
+      <label class="inline">ارقام
+        <select id="digits" aria-label="نوع ارقام">
+          <option value="fa">فارسی</option>
+          <option value="en">لاتین</option>
+        </select>
+      </label>
+      <button id="themeToggle" class="ghost" type="button" aria-label="تغییر پوسته">پوسته: خودکار</button>
+      <button id="wizardOpen" class="ghost" type="button">راه‌اندازی</button>
+      <button id="menuToggle" class="ghost" type="button" aria-expanded="false" aria-controls="menuPanel">منو ☰</button>
+    </div>
+  </div>
+</header>
+
+<nav id="menuPanel" class="menu" hidden aria-label="منوی اصلی">
+  <a href="#opportunities" data-tab="opportunities">فرصت‌ها</a>
+  <a href="#simulations" data-tab="simulations">شبیه‌سازی‌ها</a>
+  <a href="#journal" data-tab="journal">دفتر معاملات</a>
+  <a href="#diagnostics" data-tab="diagnostics">عیب‌یابی اتصال</a>
+  <a href="#setup" data-tab="setup">تنظیمات</a>
+  <a href="/settings">تنظیمات پیشرفته (صفحه قدیمی)</a>
+  <a href="/classic">داشبورد تتر / تومان</a>
+  <a href="/guide" target="_blank" rel="noopener">راهنمای فارسی</a>
+</nav>
+
+<div id="setupBanner" class="banner warning" hidden role="status">
+  <strong>راه‌اندازی کامل نشده است.</strong>
+  <span id="setupMissing"></span>
+  <button id="setupBannerAction" type="button">تکمیل راه‌اندازی</button>
+</div>
+
+<div id="message" class="message" role="status" aria-live="polite"></div>
+
+<main id="main">
+  <section id="tab-opportunities" class="tab active" aria-label="فرصت‌ها">
+    <div class="summary" id="summaryCards"></div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>فرصت‌های زنده</h2>
+          <p class="muted small">مرتب‌شده بر اساس سود خالص. ستون‌های سبز/زرد/قرمز با نماد و متن هم مشخص شده‌اند.</p>
+        </div>
+        <div class="row-actions">
+          <button id="pauseButton" type="button" class="ghost">توقف به‌روزرسانی ⏸</button>
+          <button id="refreshButton" type="button">به‌روزرسانی الان ↻</button>
+          <button id="freezeButton" type="button" class="ghost" aria-pressed="false">قفل ترتیب ❄</button>
+          <button id="manualOpen" type="button" class="ghost">ورود دستی</button>
+        </div>
+      </div>
+
+      <div class="modebar">
+        <div class="segmented" role="group" aria-label="حالت نمایش">
+          <button id="viewSimple" type="button" aria-pressed="true">ساده</button>
+          <button id="viewAdvanced" type="button" aria-pressed="false">پیشرفته</button>
+        </div>
+        <div class="capital-box">
+          <label>سرمایه من
+            <span class="capital-row">
+              <input id="capitalInput" type="text" inputmode="decimal" placeholder="مثلاً 100 یا 50 میلیون" aria-describedby="capitalHint">
+              <select id="capitalCurrency" aria-label="واحد سرمایه">
+                <option value="USDT">USDT</option>
+                <option value="toman">تومان</option>
+              </select>
+            </span>
+          </label>
+          <div class="quick" id="capitalPresets" role="group" aria-label="مبالغ سریع"></div>
+          <small id="capitalHint" class="muted"></small>
+        </div>
+        <div class="next-refresh">
+          <span class="muted small">به‌روزرسانی بعدی</span>
+          <strong id="countdown">—</strong>
+          <span id="pauseChip" class="chip" hidden>متوقف</span>
+        </div>
+      </div>
+
+      <form id="filters" class="filters" aria-label="فیلترها">
+        <label>جستجوی ارز
+          <input id="filterSearch" type="search" placeholder="BTC" autocomplete="off" aria-label="جستجوی ارز">
+        </label>
+        <label>صرافی ایرانی
+          <select id="filterIran">
+            <option value="">همه</option>
+            <option value="wallex">والکس</option>
+            <option value="nobitex">نوبیتکس</option>
+          </select>
+        </label>
+        <label>بازار
+          <select id="filterQuote">
+            <option value="">همه</option>
+            <option value="toman">تومان</option>
+            <option value="USDT">USDT</option>
+          </select>
+        </label>
+        <label>مسیر
+          <select id="filterRoute">
+            <option value="">همه</option>
+            <option value="A">خرید در بیت‌یونیکس، فروش در ایران</option>
+            <option value="B">خرید در ایران، فروش در بیت‌یونیکس</option>
+            <option value="direct_iran_to_bitunix">بازار USDT: خرید در ایران</option>
+            <option value="direct_bitunix_to_iran">بازار USDT: خرید در بیت‌یونیکس</option>
+            <option value="classic">بین دو صرافی ایرانی</option>
+          </select>
+        </label>
+        <label>حالت
+          <select id="filterMode">
+            <option value="">همه</option>
+            <option value="transfer">انتقال</option>
+            <option value="prefunded">موجودی از پیش</option>
+          </select>
+        </label>
+        <label>حداقل سود خالص (%)
+          <input id="filterMinProfit" type="number" step="any" min="0" placeholder="همه">
+        </label>
+        <label>حداقل ظرفیت (USDT)
+          <input id="filterMinCapacity" type="number" step="any" min="0" placeholder="همه">
+        </label>
+        <label class="check"><input id="filterHideGross" type="checkbox"> پنهان‌کردن ردیف‌های فقط اختلاف خام</label>
+        <label class="check"><input id="filterHideStale" type="checkbox"> پنهان‌کردن داده قدیمی</label>
+        <div class="preset-row">
+          <label>فیلترهای ذخیره‌شده
+            <select id="presetSelect"><option value="">— انتخاب —</option></select>
+          </label>
+          <button id="presetSave" type="button" class="ghost">ذخیره فیلتر</button>
+          <button id="presetDelete" type="button" class="ghost">حذف</button>
+        </div>
+      </form>
+
+      <div class="table-wrap">
+        <table id="overviewTable" class="rows">
+          <thead id="tableHead"></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div id="emptyState" class="empty" hidden></div>
+        <div id="loadingState" class="loading" hidden>در حال دریافت قیمت‌ها…</div>
+      </div>
+      <p class="muted small legend">
+        <span class="dot green"></span> سود بالای حاشیه ایمنی
+        <span class="dot yellow"></span> سود مثبت ولی زیر حاشیه ایمنی
+        <span class="dot red"></span> زیان
+        <span class="dot gray"></span> داده کافی نیست / فقط اختلاف خام
+        · نرخ تبدیل و منبع آن در کارت خلاصه و جزئیات هر ردیف آمده است.
+      </p>
+      <details class="excluded">
+        <summary>نمادهای حذف‌شده / نیازمند بررسی <span id="excludedCount"></span></summary>
+        <div id="excludedList" class="muted small"></div>
+      </details>
+    </section>
+
+    <section class="panel help-panel">
+      <h2>این اصطلاحات یعنی چه؟</h2>
+      <div class="help-grid" id="glossary"></div>
+    </section>
+  </section>
+
+  <section id="tab-simulations" class="tab" aria-label="شبیه‌سازی‌ها" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>معاملات آزمایشی</h2>
+          <p class="muted small">قیمت‌ها و نتیجه مورد انتظار ذخیره می‌شود؛ بعد از زمان انتقال، دفتر سفارش دوباره خوانده و نتیجه واقعی (با داده واقعی) ثبت می‌شود.</p></div>
+        <button id="simRefresh" type="button" class="ghost">به‌روزرسانی</button>
+      </div>
+      <div id="simSummary" class="summary small-summary"></div>
+      <div class="table-wrap"><table class="rows"><thead><tr>
+        <th>زمان ثبت</th><th>ارز</th><th>مسیر</th><th>سرمایه</th><th>سود انتظار</th><th>سود واقعی</th><th>اختلاف</th><th>وضعیت</th><th></th>
+      </tr></thead><tbody id="simRows"></tbody></table></div>
+      <div id="simEmpty" class="empty" hidden>هنوز معامله آزمایشی ثبت نکرده‌اید. در جزئیات هر ردیف، دکمه «معامله آزمایشی» را بزنید.</div>
+    </section>
+  </section>
+
+  <section id="tab-journal" class="tab" aria-label="دفتر معاملات" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>دفتر معاملات دستی</h2>
+          <p class="muted small">معاملات واقعی خود را ثبت کنید تا با تخمین برنامه مقایسه شود. این اطلاعات فقط روی همین رایانه ذخیره می‌شود.</p></div>
+        <a href="/api/journal.csv" class="button-link">خروجی CSV ↙</a>
+      </div>
+      <form id="journalForm" class="filters">
+        <label>تاریخ<input id="journalDate" type="date" required></label>
+        <label>ارز<input id="journalCoin" placeholder="BTC" required maxlength="20"></label>
+        <label>مسیر<select id="journalRoute">
+          <option value="A">خرید در بیت‌یونیکس، فروش در ایران</option>
+          <option value="B">خرید در ایران، فروش در بیت‌یونیکس</option>
+          <option value="direct_iran_to_bitunix">بازار USDT: خرید در ایران</option>
+          <option value="direct_bitunix_to_iran">بازار USDT: خرید در بیت‌یونیکس</option>
+          <option value="classic">بین دو صرافی ایرانی</option>
+          <option value="other">دیگر</option>
+        </select></label>
+        <label>حالت<select id="journalMode">
+          <option value="transfer">انتقال</option><option value="prefunded">موجودی از پیش</option>
+        </select></label>
+        <label>سرمایه<input id="journalCapital" type="number" step="any" min="0"></label>
+        <label>مبلغ نهایی<input id="journalFinal" type="number" step="any" min="0"></label>
+        <label>سود (خالی = محاسبه خودکار)<input id="journalProfit" type="number" step="any"></label>
+        <label>کارمزدها<input id="journalFees" maxlength="200" placeholder="مثلاً 1 USDT + 0.2%"></label>
+        <label class="wide">یادداشت<input id="journalNote" maxlength="500"></label>
+        <p><button type="submit">ثبت معامله</button></p>
+      </form>
+      <div class="table-wrap"><table class="rows"><thead><tr>
+        <th>تاریخ</th><th>ارز</th><th>مسیر</th><th>سرمایه</th><th>نهایی</th><th>سود</th><th>کارمزد</th><th>یادداشت</th><th></th>
+      </tr></thead><tbody id="journalRows"></tbody></table></div>
+      <div id="journalEmpty" class="empty" hidden>هنوز معامله‌ای ثبت نشده است.</div>
+    </section>
+  </section>
+
+  <section id="tab-diagnostics" class="tab" aria-label="عیب‌یابی اتصال" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>عیب‌یابی اتصال</h2>
+          <p class="muted small">برای هر صرافی: آخرین آدرس درخواست، کد HTTP، زمان پاسخ، معتبر بودن JSON، دلیل رد داده و پیش‌نمایش پاسخ خام (۵۰۰ کاراکتر اول).</p></div>
+        <div class="row-actions">
+          <button id="testAll" type="button">تست همه</button>
+          <button id="diagRefresh" type="button" class="ghost">به‌روزرسانی</button>
+        </div>
+      </div>
+      <div id="diagClock" class="banner warning" hidden></div>
+      <div id="diagCards" class="diag-grid"></div>
+      <div id="testResults" class="test-results"></div>
+    </section>
+    <section class="panel">
+      <h2>پروکسی، User-Agent و سقف زمان داده</h2>
+      <p class="muted small">اگر صرافی کلاینت پیش‌فرض را مسدود کند، User-Agent را عوض کنید. برای شبکه محدود، آدرس پروکسی HTTP یا SOCKS را وارد کنید. کاراکترهای حساس پروکسی در این صفحه پوشانده می‌شوند.</p>
+      <form id="connectionForm" class="filters">
+        <label class="wide">آدرس پروکسی<input id="proxyUrl" dir="ltr" placeholder="socks5://127.0.0.1:1080" maxlength="300"></label>
+        <label class="wide">User-Agent<input id="userAgent" dir="ltr" maxlength="200"></label>
+        <label>حداکثر سن داده صرافی (ثانیه)<input id="maxAge" type="number" min="10" max="3600"></label>
+        <label>آستانه هشدار اختلاف ساعت (ثانیه)<input id="skewWarn" type="number" min="10" max="3600"></label>
+        <p><button type="submit">ذخیره تنظیمات اتصال</button></p>
+      </form>
+      <div id="budgetTable" class="table-wrap"></div>
+      <details><summary>واژه‌نامه دلایل خطا</summary><div id="reasonCatalog" class="muted small"></div></details>
+    </section>
+  </section>
+
+  <section id="tab-setup" class="tab" aria-label="تنظیمات" hidden>
+    <section class="panel">
+      <h2>کارمزد معاملاتی سراسری</h2>
+      <p class="muted small">هر صرافی و هر بازار جداگانه است. کارمزد بیت‌یونیکس عمداً خالی است: تا خودتان وارد نکنید، سود خالص نمایش داده نمی‌شود.</p>
+      <form id="feeForm" class="fee-grid"></form>
+      <p><button id="feeSave" type="button">ذخیره کارمزدهای معاملاتی</button></p>
+    </section>
+    <section class="panel">
+      <h2>کارمزد برداشت و شبکه‌ها</h2>
+      <p class="muted small">جدول از ابتدا خالی است. برای هر ارز و شبکه، یک ردیف برای هر صرافی وارد کنید. «پشتیبانی» یعنی واریز/برداشت آن شبکه در آن صرافی فعال است. خالی یعنی نامعلوم.</p>
+      <div class="table-wrap"><table class="rows"><thead><tr>
+        <th>صرافی</th><th>ارز</th><th>شبکه</th><th>کارمزد برداشت (واحد ارز)</th><th>حداقل برداشت</th><th>پشتیبانی</th><th></th>
+      </tr></thead><tbody id="networkFeeRows"></tbody></table></div>
+      <div class="row-actions"><button id="networkFeeAdd" type="button" class="ghost">افزودن ردیف</button>
+        <button id="networkFeeSave" type="button">ذخیره جدول کارمزد</button></div>
+    </section>
+    <section class="panel">
+      <h2>ستون‌ها (حالت پیشرفته)</h2>
+      <p class="muted small">انتخاب شما در SQLite ذخیره می‌شود.</p>
+      <div id="columnChooser" class="check-grid"></div>
+    </section>
+    <section class="panel">
+      <h2>پشتیبان‌گیری و بازگردانی تنظیمات</h2>
+      <p class="muted small">همه تنظیمات (کارمزدها، سطوح، شبکه‌ها، فیلترهای ذخیره‌شده، وضعیت راه‌اندازی) در یک فایل JSON.</p>
+      <div class="row-actions">
+        <a href="/api/backup" class="button-link">دریافت فایل پشتیبان ↙</a>
+        <label class="file">بازگردانی از فایل<input id="restoreFile" type="file" accept="application/json,.json"></label>
+        <a href="/settings" class="button-link ghost">تنظیمات پیشرفته و سطوح کارمزد</a>
+      </div>
+    </section>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden aria-label="جزئیات فرصت" role="dialog" aria-modal="false">
+  <div class="drawer-head">
+    <div><h2 id="drawerTitle">جزئیات</h2><p id="drawerSub" class="muted small"></p></div>
+    <button id="drawerClose" type="button" class="ghost" aria-label="بستن جزئیات">بستن ✕</button>
+  </div>
+  <div class="drawer-tabs" role="tablist">
+    <button data-drawer-tab="breakdown" role="tab" aria-selected="true">مرحله‌به‌مرحله</button>
+    <button data-drawer-tab="plan" role="tab" aria-selected="false">طرح معامله</button>
+    <button data-drawer-tab="books" role="tab" aria-selected="false">دفتر سفارش</button>
+    <button data-drawer-tab="history" role="tab" aria-selected="false">تاریخچه اختلاف</button>
+    <button data-drawer-tab="fees" role="tab" aria-selected="false">کارمزدهای استفاده‌شده</button>
+  </div>
+  <div id="drawerBody" class="drawer-body"></div>
+  <p class="muted small">همه اعداد تخمینی از دفتر سفارش فعلی هستند؛ این برنامه سفارش ثبت نمی‌کند.</p>
+</aside>
+
+<aside id="wizard" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="wizardTitle">
+  <div class="modal-card">
+    <div class="modal-head"><h2 id="wizardTitle">راه‌اندازی گام‌به‌گام</h2>
+      <button id="wizardClose" type="button" class="ghost" aria-label="بستن">✕</button></div>
+    <ol id="wizardSteps" class="steps"></ol>
+    <div id="wizardBody"></div>
+    <div class="modal-actions">
+      <button id="wizardPrev" type="button" class="ghost">قبلی</button>
+      <button id="wizardNext" type="button">بعدی</button>
+    </div>
+  </div>
+</aside>
+
+<aside id="manualDrawer" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="manualTitle">
+  <div class="modal-card">
+    <div class="modal-head"><h2 id="manualTitle">ورود دستی قیمت تتر/تومان</h2>
+      <button id="manualClose" type="button" class="ghost" aria-label="بستن">✕</button></div>
+    <p class="muted small">این فرم فقط داشبورد قدیمی «تتر / تومان» را با قیمت دستی پر می‌کند (وقتی دریافت زنده ممکن نیست). بدون عمق و بدون لغزش است و در محاسبه سود مسیرهای بیت‌یونیکس استفاده نمی‌شود.</p>
+    <div id="manualForms" class="filters"></div>
+  </div>
+</aside>
+
+<div id="helpPop" class="help-pop" hidden role="tooltip"></div>
+
+<footer class="footer">
+  <p>ساخته‌شده برای استفاده محلی · داده‌های عمومی صرافی‌ها · بدون ثبت سفارش · فونت وزیرمتن با مجوز OFL همراه برنامه است.</p>
+</footer>
+
+<script src="/static/sort.js"></script>
+<script src="/static/ui.js"></script>
+<script src="/static/drawer.js"></script>
+<script src="/static/panels.js"></script>
+<script>App.init(); App.initPanels();</script>
+</body>
+</html>
