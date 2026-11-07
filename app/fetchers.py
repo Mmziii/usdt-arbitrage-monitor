@@ -32,6 +32,7 @@ def parse_book(name, data):
             raise ValueError('Wallex unsuccessful response')
         body = data['result']
         asks, bids = levels(body['ask'], objects=True), levels(body['bid'], objects=True)
+        updated = time.time()
     else:
         if data.get('status') != 'ok':
             raise ValueError('Nobitex unsuccessful response')
@@ -44,7 +45,7 @@ def parse_book(name, data):
     bids.sort(reverse=True)
     if bids[0][0] > asks[0][0]:
         raise ValueError('Crossed order book')
-    return Book(asks, bids, time.time())
+    return Book(asks, bids, updated)
 
 
 async def fetch_book(client, name):
