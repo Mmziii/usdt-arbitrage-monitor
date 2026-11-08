@@ -17,6 +17,14 @@ const App = (() => {
     poll: null,
     clock: null,
     loadingReceipt: false,
+    // Click reliability: a refresh never replaces what is being pressed or typed in.
+    press: null,
+    pending: null,
+    renderQueued: false,
+    inflight: false,
+    seq: 0,
+    queued: false,
+    sig: {},
   };
 
   /* ------------------------------------------------------------ helpers */
@@ -92,11 +100,29 @@ const App = (() => {
     return isFinite(value) && value > 0 ? value : null;
   }
 
+  // A request that never answers must not leave a button disabled for ever.
+  const API_TIMEOUT_MS = 15000;
+
   async function api(path, options) {
-    const response = await fetch(path, {
-      headers: { 'Content-Type': 'application/json' },
-      ...(options || {}),
-    });
+    const request = { headers: { 'Content-Type': 'application/json' }, ...(options || {}) };
+    let timer = null;
+    if (!request.signal && typeof AbortController === 'function') {
+      const controller = new AbortController();
+      request.signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    }
+    let response;
+    try {
+      response = await fetch(path, request);
+    } catch (error) {
+      if (timer) clearTimeout(timer);
+      const failure = new Error(error && error.name === 'AbortError'
+        ? 'پاسخ سرور دیر رسید؛ دوباره تلاش کنید.'
+        : 'ارتباط با سرور برنامه برقرار نشد؛ دوباره تلاش کنید.');
+      failure.status = 0;
+      throw failure;
+    }
+    if (timer) { clearTimeout(timer); timer = null; }
     let body = null;
     try { body = await response.json(); } catch (error) { body = null; }
     if (!response.ok) {
@@ -141,9 +167,72 @@ const App = (() => {
   function closeDialog(dialog) {
     if (!dialog) return;
     if (typeof dialog.close === 'function') {
-      try { dialog.close(); return; } catch (error) { /* fall through */ }
+      try { dialog.close(); flushPending(); return; } catch (error) { /* fall through */ }
     }
     dialog.removeAttribute('open');
+    flushPending();
+  }
+
+  /* ------------------------------------------------- interaction safety */
+  // A poll must never replace the node the user is pressing, hovering or typing in: the
+  // browser then dispatches `click` on a detached node and the press is swallowed, which
+  // is exactly the "the button needs two clicks" symptom.
+  function isOpen(dialog) {
+    return !!dialog && (dialog.open === true || dialog.hasAttribute('open'));
+  }
+
+  function typing() {
+    const active = document.activeElement;
+    if (!active || !active.matches) return false;
+    return active.matches('input, select, textarea');
+  }
+
+  function blocking() {
+    if (state.press) return 'press';
+    if (typing()) {
+      const boxes = ['resultBody', 'setupSummary', 'othersGrid', 'banner', 'gaugeBody',
+        'checks', 'receiptSection'];
+      for (let index = 0; index < boxes.length; index += 1) {
+        const box = $(boxes[index]);
+        if (box && box.contains(document.activeElement)) return 'focus';
+      }
+    }
+    if (isOpen($('wizard')) || isOpen($('receiptDialog'))) return 'layer';
+    return null;
+  }
+
+  function queueRender() {
+    if (state.renderQueued) return;
+    if (!blocking()) {
+      applyPending();
+      if (!state.pending) return;
+    }
+    state.renderQueued = true;
+    const run = () => { state.renderQueued = false; applyPending(); };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  }
+
+  function applyPending() {
+    if (!state.pending) return false;
+    if (blocking()) return false;
+    const data = state.pending;
+    state.pending = null;
+    state.home = data;
+    const wizard = $('wizard');
+    if (!wizard || !isOpen(wizard)) state.wizard = null;
+    render(data);
+    return true;
+  }
+
+  function hasPendingRender() {
+    return !!state.pending;
+  }
+
+  function flushPending() {
+    if (!state.pending) return false;
+    if (blocking()) { queueRender(); return false; }
+    return applyPending();
   }
 
   /* ------------------------------------------------------------- header */
@@ -189,6 +278,7 @@ const App = (() => {
     const box = $('setupSummary');
     const setup = data.setup || {};
     if (!box) return;
+    if (!state.force && unchanged('setup', [data.setup, data.capital])) return;
     box.textContent = '';
     (setup.exchange_labels || []).forEach((label) => box.appendChild(make('span', 'chip on', label)));
     if (setup.money_label) box.appendChild(make('span', 'chip', setup.money_label));
@@ -208,6 +298,7 @@ const App = (() => {
     const list = $('bannerItems');
     if (!banner || !list) return;
     const info = data.banner || {};
+    if (!state.force && unchanged('banner', info)) return;
     list.textContent = '';
     const items = info.items || [];
     if (!items.length || info.dismissed) {
@@ -235,6 +326,10 @@ const App = (() => {
 
   /* -------------------------------------------------------------- result */
   function renderResult(data) {
+    if (!state.force && unchanged('result', [data.best, data.empty])) {
+      renderEmpty(data);
+      return;
+    }
     const best = data.best;
     const body = $('resultBody');
     const loading = $('resultLoading');
@@ -344,6 +439,7 @@ const App = (() => {
   function renderGauge(data) {
     const box = $('gaugeBody');
     if (!box) return;
+    if (!state.force && unchanged('gauge', data.gauge || {})) return;
     box.textContent = '';
     const gauge = data.gauge || {};
     if (!gauge.ready) {
@@ -500,6 +596,9 @@ const App = (() => {
   }
 
   function renderReceiptInline(receipt, key) {
+    const signature = JSON.stringify([receipt, key]);
+    if (!state.force && state.sig.receipt === signature) return;
+    state.sig.receipt = signature;
     const section = $('receiptSection');
     const box = $('receiptInline');
     if (!box || !section) return;
@@ -607,24 +706,57 @@ const App = (() => {
     const section = $('othersSection');
     const grid = $('othersGrid');
     if (!section || !grid) return;
-    grid.textContent = '';
     const others = data.others || [];
-    if (!others.length) { section.hidden = true; return; }
-    others.forEach((option) => {
-      const card = make('button', 'option');
-      card.type = 'button';
-      const top = make('span', 'top-line');
-      top.appendChild(make('b', '', option.coin || ''));
-      top.appendChild(make('span', 'tag ' + (option.tone || ''), (option.icon || '') + ' ' + (option.label || '')));
-      card.appendChild(top);
-      card.appendChild(make('span', 'muted small', option.route_label || ''));
-      card.appendChild(make('span', 'muted small', (option.venues || []).filter(Boolean).join(' ← ')));
-      card.appendChild(make('span', 'num',
-        percent(option.net_after_other !== undefined && option.net_after_other !== null
-          ? option.net_after_other : option.net_pct) + ' سود خالص'));
-      card.addEventListener('click', () => openReceipt(option.key));
-      grid.appendChild(card);
+    if (!others.length) {
+      section.hidden = true;
+      if (state.sig.others !== '[]') { grid.textContent = ''; state.sig.others = '[]'; }
+      return;
+    }
+    if (unchanged('others', others)) { section.hidden = false; return; }
+    const existing = new Map();
+    Array.from(grid.children).forEach((node) => existing.set(node.dataset.key, node));
+    others.forEach((option, index) => {
+      const key = [option.key, option.coin, option.route_label].join('|');
+      let card = existing.get(key);
+      if (!card) {
+        card = make('button', 'option');
+        card.type = 'button';
+        card.dataset.key = key;
+        const top = make('span', 'top-line');
+        top.appendChild(make('b', ''));
+        top.appendChild(make('span', 'tag'));
+        card.appendChild(top);
+        card.appendChild(make('span', 'muted small'));
+        card.appendChild(make('span', 'muted small'));
+        card.appendChild(make('span', 'num'));
+        // Delegated through the grid, so a re-render can never double-bind this card.
+        card.addEventListener('click', () => openReceipt(card.dataset.receiptKey));
+        existing.set(key, card);
+      }
+      card.dataset.receiptKey = String(option.key || '');
+      const top = card.querySelector('.top-line');
+      const coin = top.children[0];
+      const tag = top.children[1];
+      if (coin.textContent !== String(option.coin || '')) coin.textContent = option.coin || '';
+      const tagClass = 'tag ' + (option.tone || '');
+      if (tag.className !== tagClass) tag.className = tagClass;
+      const tagText = (option.icon || '') + ' ' + (option.label || '');
+      if (tag.textContent !== tagText) tag.textContent = tagText;
+      const route = card.children[1];
+      const routeText = option.route_label || '';
+      if (route.textContent !== routeText) route.textContent = routeText;
+      const venues = card.children[2];
+      const venueText = (option.venues || []).filter(Boolean).join(' ← ');
+      if (venues.textContent !== venueText) venues.textContent = venueText;
+      const net = card.children[3];
+      const netText = percent(option.net_after_other !== undefined && option.net_after_other !== null
+        ? option.net_after_other : option.net_pct) + ' سود خالص';
+      if (net.textContent !== netText) net.textContent = netText;
+      const current = grid.children[index];
+      if (current !== card) grid.insertBefore(card, current || null);
+      existing.delete(key);
     });
+    existing.forEach((node) => node.remove());
     section.hidden = false;
   }
 
@@ -633,6 +765,7 @@ const App = (() => {
     const card = $('feesHint');
     const text = $('feesText');
     if (!card || !text) return;
+    if (!state.force && unchanged('fees', data.fees || {})) return;
     const needs = data.fees || {};
     if (!needs.text) {
       card.hidden = false;
@@ -650,14 +783,17 @@ const App = (() => {
 
   /* ---------------------------------------------------------------- load */
   async function load() {
+    if (state.inflight) { state.queued = true; return; }
+    state.inflight = true;
+    const seq = ++state.seq;
     try {
       const data = await api('/api/home');
-      const wizard = $('wizard');
-      if (!wizard || !wizard.open) state.wizard = null;
-      state.home = data;
-      render(data);
+      if (seq !== state.seq) return;   // a newer request already answered
+      state.pending = data;
+      queueRender();
       setText('tagline', 'تتر و ارز دیجیتال بین صرافی‌های ایرانی و بیت‌یونیکس');
     } catch (error) {
+      if (seq !== state.seq) return;
       const loading = $('resultLoading');
       if (loading) loading.hidden = true;
       const body = $('resultBody');
@@ -670,18 +806,37 @@ const App = (() => {
       const button = $('connectionBtn');
       if (button) button.dataset.state = 'error';
       setText('connectionText', 'قطعی موقت');
+    } finally {
+      state.inflight = false;
+      // Polling keeps going even while a render is deferred, so the data applied when the
+      // user lets go of the mouse is the newest one.
+      schedulePoll();
+      if (state.queued) {
+        state.queued = false;
+        if (!state.paused) load();
+      }
     }
-    schedulePoll();
   }
 
-  function render(data) {
-    renderHeader(data);
+  // Each section compares its own payload and only writes the DOM when it really
+  // changed; an unchanged refresh therefore touches nothing at all.
+  function unchanged(name, value) {
+    const text = JSON.stringify(value);
+    if (state.sig[name] === text) return true;
+    state.sig[name] = text;
+    return false;
+  }
+
+  function render(data, force) {
+    state.force = !!force;
+    renderHeader(data);       // text nodes only: the countdown must keep ticking
     renderBanner(data);
     renderSetup(data);
     renderResult(data);
     renderGauge(data);
     renderOthers(data);
     renderFeesHint(data);
+    state.force = false;
   }
 
   function schedulePoll() {
@@ -708,7 +863,12 @@ const App = (() => {
 
   async function refresh() {
     const button = $('refreshBtn');
-    if (button) button.disabled = true;
+    if (button) {
+      if (button.dataset.busy === '1') return;   // ignore a double click while working
+      button.dataset.busy = '1';
+      button.disabled = true;                    // feedback before the request starts
+      button.setAttribute('aria-busy', 'true');
+    }
     try {
       await api('/api/overview/refresh', { method: 'POST', body: '{}' });
       await load();
@@ -716,7 +876,11 @@ const App = (() => {
     } catch (error) {
       toast(friendly(error));
     } finally {
-      if (button) button.disabled = false;
+      if (button) {
+        button.dataset.busy = '0';
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+      }
     }
   }
 
@@ -979,6 +1143,25 @@ const App = (() => {
     on('bannerClose', 'click', dismissBanner);
     on('notifyToggle', 'change', (event) => setNotify(event.target.checked));
     on('themeBtn', 'click', cycleTheme);
+
+    // ---- a refresh never replaces the control under the finger
+    document.addEventListener('mousedown', (event) => { state.press = event.target; }, true);
+    document.addEventListener('pointerdown', (event) => { state.press = event.target; }, true);
+    ['mouseup', 'pointerup', 'touchend', 'click', 'contextmenu'].forEach((name) => {
+      document.addEventListener(name, () => {
+        if (!state.press) return;
+        state.press = null;
+        flushPending();
+      }, true);
+    });
+    document.addEventListener('focusout', () => {
+      setTimeout(() => { flushPending(); }, 0);
+    }, true);
+    window.addEventListener('blur', () => { state.press = null; flushPending(); });
+    ['wizard', 'receiptDialog'].forEach((id) => {
+      const dialog = $(id);
+      if (dialog) dialog.addEventListener('close', () => flushPending());
+    });
     on('connectionBtn', 'click', () => { window.location.href = '/dashboard#diagnostics'; });
   }
 
@@ -1021,6 +1204,7 @@ const App = (() => {
 
   return {
     init, load, render, openReceipt, openWizard, wizardNext, wizardBack, saveSetup,
+    hasPendingRender, flushPending,
     setNotify, togglePause, refresh, dismissBanner, cycleTheme, parseAmount,
     number: money, percent, state, renderWizard,
   };

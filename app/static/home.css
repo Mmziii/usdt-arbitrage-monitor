@@ -485,6 +485,9 @@ button[disabled] { opacity: .55; cursor: not-allowed; transform: none; }
   color: var(--bg);
   font-size: .9rem;
   z-index: 30;
+  /* A status pill is not a control: while it sits over a button it must not eat the
+     click the user aimed at that button. */
+  pointer-events: none;
 }
 
 .empty { text-align: center; }

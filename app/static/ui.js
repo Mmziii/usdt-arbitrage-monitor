@@ -278,9 +278,15 @@
     App.flushPending();
   };
 
-  // One render per frame, and never while the user is interacting with the page.
+  // Never while the user is interacting with the page; otherwise apply at once (the
+  // deferred case is batched into one animation frame so several held-back answers
+  // collapse into a single write).
   App.queueRender = function () {
     if (App.state.renderQueued) return;
+    if (!App.blockingInteraction()) {
+      App.applyPending();
+      if (!App.state.pendingData) return;
+    }
     App.state.renderQueued = true;
     const run = function () {
       App.state.renderQueued = false;
