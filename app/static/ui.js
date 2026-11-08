@@ -1052,6 +1052,10 @@
   App.init = function () {
     App.bindGlobal();
     App.load(true);
+    // Deep link from the home screen's connection indicator: /dashboard#diagnostics
+    if (typeof location !== 'undefined' && location.hash === '#diagnostics') {
+      setTimeout(function () { App.switchTab('diagnostics'); }, 0);
+    }
     fetch('/api/ui').then(response => response.json()).then(function (ui) {
 
       App.state.ui = ui;

@@ -979,7 +979,7 @@ const App = (() => {
     on('bannerClose', 'click', dismissBanner);
     on('notifyToggle', 'change', (event) => setNotify(event.target.checked));
     on('themeBtn', 'click', cycleTheme);
-    on('connectionBtn', 'click', () => { window.location.href = '/dashboard'; });
+    on('connectionBtn', 'click', () => { window.location.href = '/dashboard#diagnostics'; });
   }
 
   async function dismissBanner() {
