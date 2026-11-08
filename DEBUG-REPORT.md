@@ -159,3 +159,39 @@ node tests/sort_order_test.cjs                     # ok
 ## ۱۴. فایل‌های تغییر‌یافته در این مرحله
 
 `app/static/ui.css`، `app/static/dashboard.html`، `app/static/guide.html`، `app/static/ui.js`، `app/static/panels.js`، `app/static/drawer.js`، `app/static/sort.js`، `app/static/app.js`، `app/static/overview.js`، `app/main.py`، `app/tiers.py`، `app/chain.py`، `start.bat`، `README.md`، و تست‌های `tests/test_api_sweep.py`، `tests/test_cycle_edges.py`، `tests/test_ui_state.py`، `tests/test_windows_launcher.py`، `tests/test_pages.py`، `tests/ui_smoke.cjs`، `tests/ui_dashboard_smoke.cjs`، `tests/ui_controls_smoke.cjs`، `tests/ui_classic_smoke.cjs`، `tests/sort_order_test.cjs`.
+
+## بازطراحی «خانه» — باگ‌های واقعی که در مسیر پیدا و رفع شد
+
+این بخش فقط چیزهایی است که در همین پاس **واقعاً شکست خورد** (یا با اجرا/تست معلوم شد) و اصلاح شد.
+
+| # | نشانه | ریشه | اصلاح | تست پوشش‌دهنده |
+|---|---|---|---|---|
+| ۱ | `import app.main` با `NameError: DEFAULT_FEE_PAGES` | `fee_pages` به `AppSettings` اضافه شد ولی نماد از `fee_sources` وارد نشده بود | ایمپورت اضافه شد | همه تست‌های pytest (جمع‌آوری اولیه) |
+| ۲ | `/api/diagnostics` در تست‌ها ۵۰۰ می‌داد | `gateway.agent_for` روی fake gateway تست وجود ندارد | `hasattr` guard و `{}` | `test_api_sweep.py` |
+| ۳ | کارمزد «تخمینی» (پیش‌فرض‌ها) هرگز جلوی «برو» را نمی‌گرفت، چون فقط متن بود | مفهوم اطمینان به موتور تصمیم وصل نبود | `fee_confidence.trading_fee_tag` + قاعده «تخمینی ⇒ حداکثر صبر کن» | `test_fee_confidence.py`, `test_decision.py` |
+| ۴ | مسیر بدون کارمزد «نامطمئن» نمی‌شد چون موتور زنجیره را قبل از ساخت مراحل رد می‌کند و فهرست کارمزدهای لازم خالی می‌ماند | کارمزدهای لازم از `detail.taker.steps` مشتق می‌شد | `route_stages(row)` مستقل از قیمت‌گذاری + استفاده در `route_fee_entries` و `fee_needs` | `test_home_api.py::test_a_route_without_fees_is_unsure_not_profitable` |
+| ۵ | «برای این N ارز کارمزد لازم است» همیشه ۰ بود | همان ریشه #۴ | همان اصلاح | `test_home_api.py::test_lazy_fee_loading_only_asks_about_the_top_routes` |
+| ۶ | تبدیل سرمایه «۵۰ میلیون تومان» به USDT انجام نمی‌شد (همیشه همان ۱۰۰ می‌ماند) | `conversion_rate()` کلید `rate` ندارد؛ `bid/ask` دارد و کد `.get('rate')` می‌خواند | تابع `reference_rate(cfg)` (میانگین bid/ask) در setup/home/هزینه‌های دیگر | `test_home_api.py::test_capital_can_be_written_in_toman` |
+| ۷ | `net_after_other` در خانه همیشه `None` بود | وقتی «هزینه‌های دیگر» صفر بود `other_pct` صفر نمی‌شد | `other_pct = 0.0` وقتی نرخ و سرمایه معلوم است | `test_receipt_engine.py` |
+| ۸ | حتی وقتی همه کارمزدها/قیمت‌ها نبودند یک «کارت بهترین» با اعداد خالی نشان داده می‌شد | `best` اولین ردیف بود، نه اولین ردیف قابل قیمت‌گذاری | فقط ردیفی که اختلاف خام یا سود خالص دارد `best` می‌شود؛ وگرنه حالت خالی | `test_home_api.py::test_home_survives_an_empty_market` |
+| ۹ | رسید مسیر بدون کارمزد، بخش «از صفر تا صد» را با محتوای قبلی باز می‌گذاشت | در حالت خالی `receiptSection` پنهان نمی‌شد | پنهان‌کردن صریح در `renderResult` | `tests/ui_home_smoke.cjs` |
+| ۱۰ | «BTC TRC20 0.5 10» در دستیار کارمزد «شبکه شناخته نشد» می‌گرفت | جداسازی سلول‌ها فقط با تب/دو فاصله بود و `USDT` در فهرست stopwordها | جداسازی تک‌فاصله‌ای، حذف `USDT` از stopwordها، تشخیص «اول ارز، بعد شبکه» و نام‌های فارسی شبکه | `test_fee_text_parser.py` |
+| ۱۱ | «ETH BEP20 0.01» شبکه را ERC20 می‌گرفت (چون ETH هم نام شبکه است) | شبکه‌ها قبل از ارز استخراج می‌شد | نشانه ارز اول پیدا می‌شود و توکن خودِ ارز از فهرست شبکه‌ها حذف می‌شود | `test_fee_text_parser.py` |
+| ۱۲ | یک ردیف `null`/غیرعددی در تاریخچه، `/api/gauge` را می‌شکست | `float(value)` بدون اعتبارسنجی | پاک‌سازی با `_clean` | `test_gauge.py::test_junk_values_are_ignored_not_averaged_in` |
+| ۱۳ | کارمزد بدون مقدار `needs_review=False` می‌گرفت | شرط فقط کهنگی را می‌دید | `needs_review` شامل «بدون مقدار» هم شد | `test_fee_confidence.py` |
+| ۱۴ | `supported` و `confidence` ردیف‌های قدیمی `NULL` می‌ماند و «نامعلوم» نمایش داده می‌شد | مسیر ذخیره قدیمی برچسب نمی‌گذاشت | پیش‌فرض `manual` برای ردیف دارای مقدار در `_fee_tuple` و مهاجرت ستون‌ها | `test_fee_confidence.py`, مهاجرت در `test_storage` موجود |
+| ۱۵ | مقدار `net` در کارت خانه از رسید می‌آمد و برای مسیر بدون کارمزد خالی می‌شد، در حالی که اختلاف خام معلوم بود | منبع اعداد کارت فقط `receipt.totals` بود | فالبک به `row['gross_pct']`/`row['net_pct']` | `test_home_api.py::test_a_route_without_fees_is_unsure_not_profitable` |
+
+### چیزهایی که عمداً تغییر نکردند
+- موتور محاسبه (`calculation.py`، `chain.py`، `cycle.py`)، آداپترها و همه تست‌های قبلی دست‌نخورده‌اند؛
+  رسید و تصمیم فقط از خروجی همان موتور تغذیه می‌شوند.
+- هیچ سفارش/کلید API/ورود به حساب اضافه نشد. نقاط پایانی کارمزد فقط خواندنی و عمومی‌اند.
+- عدد کارمزد هیچ‌جا پر نمی‌شود؛ «نامعلوم» یک وضعیت واقعی است، نه صفر.
+
+### وضعیت تست در پایان این مرحله
+- `pytest`: **۳۱۸ تست سبز** (۲۲۱ تست قبلی + ۹۷ تست جدید/توسعه‌یافته).
+- jsdom: `ui_smoke`، `ui_dashboard_smoke`، `ui_controls_smoke`، `ui_classic_smoke`،
+  `ui_home_smoke`، `ui_fees_smoke` و `sort_order_test.cjs` — همه سبز.
+- اجرای زنده: `GET /`، `/fees`، `/dashboard`، `/guide`، `/settings`، `/api/home`، `/api/fees`،
+  `/api/setup`، `/api/gauge`، `/api/fees/needed` روی `127.0.0.1:8000` همه ۲۰۰ برگرداندند
+  (در این سندباکس بازار زنده‌ای وجود ندارد، پس صفحه «فعلاً فرصت سودده‌ای نیست» را نشان می‌دهد).
