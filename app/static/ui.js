@@ -11,6 +11,12 @@
       wizardStep: 1, wizardDraft: null, loading: true, sounds: {}, audio: null,
       lastRender: 0, thresholdFired: {}, rowEls: new Map(), initialized: false,
       returnFocus: {}, messageDismissed: null, wizardBusy: false,
+      // Click reliability: a poll must never replace a node the user is pressing,
+      // hovering or typing in. See App.blockingInteraction below.
+      press: null, pendingData: null, renderQueued: false, deferredBy: null,
+      loadSeq: 0, inflight: false, queuedReload: false, rowLimit: 200,
+      tableSig: null, headSig: null, chipEls: new Map(), summarySig: null,
+      bannerSig: null, bannerWired: false, rowsWired: false, abort: null,
     },
   };
 
@@ -219,9 +225,108 @@
     if (previous && document.contains(previous) && typeof previous.focus === 'function') {
       previous.focus();
     }
+    // Data that arrived while the dialog covered the page is applied now.
+    App.flushPending();
   };
 
   App.isLayerOpen = element => !!element && !element.hidden;
+
+  // --------------------------------------------------- click reliability guards
+  // A browser dispatches `click` on the nearest common inclusive ancestor of the
+  // mousedown and mouseup targets. If a re-render detached the mousedown node in
+  // between, the click lands on a detached node and no handler runs — the user sees
+  // "nothing happened" and clicks again. Everything below exists to make sure a poll
+  // never replaces a node that is being pressed, hovered or typed in.
+  const INTERACTIVE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  const RERENDERED = ['summaryCards', 'exchangeChips', 'capitalPresets', 'rows', 'setupBanner',
+    'tableHead', 'columnChooser'];
+  const LAYERS = ['drawer', 'wizard', 'manualDrawer'];
+
+  App.blockingInteraction = function () {
+    if (App.state.press) return 'press';
+    const active = document.activeElement;
+    const typing = active && active.matches && active.matches('input, select, textarea');
+    if (typing) {
+      for (let index = 0; index < RERENDERED.length; index += 1) {
+        const box = $(RERENDERED[index]);
+        if (box && box.contains(active)) return 'focus';
+      }
+    }
+    for (let index = 0; index < LAYERS.length; index += 1) {
+      if (App.isLayerOpen($(LAYERS[index]))) return 'layer';
+    }
+    return null;
+  };
+
+  // True when this node holds the pressed or the focused element: patch everything
+  // around it, leave it alone.
+  App.nodeBusy = function (node) {
+    if (!node || !node.contains) return false;
+    if (App.state.press && node.contains(App.state.press)) return true;
+    const active = document.activeElement;
+    return !!active && active !== node && node.contains(active) && active.matches
+      && active.matches(INTERACTIVE);
+  };
+
+  App.markPress = function (target) {
+    App.state.press = target || null;
+  };
+
+  App.clearPress = function () {
+    if (!App.state.press) return;
+    App.state.press = null;
+    App.flushPending();
+  };
+
+  // One render per frame, and never while the user is interacting with the page.
+  App.queueRender = function () {
+    if (App.state.renderQueued) return;
+    App.state.renderQueued = true;
+    const run = function () {
+      App.state.renderQueued = false;
+      App.applyPending();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  };
+
+  App.applyPending = function () {
+    const pending = App.state.pendingData;
+    if (!pending) return false;
+    const blocked = App.blockingInteraction();
+    if (blocked) {
+      // Keep the freshest data and apply it as soon as the user lets go.
+      App.state.deferredBy = blocked;
+      return false;
+    }
+    App.state.pendingData = null;
+    App.state.deferredBy = null;
+    const data = pending.data;
+    App.state.data = data;
+    App.state.settings = data.settings;
+    if (!App.state.initialized) {
+      App.state.ui = data.ui;
+      App.applyUi();
+      App.writeFilters(data.ui.last_filter || {});
+      App.state.initialized = true;
+    }
+    App.renderSummary(data);
+    App.renderTable(true);
+    App.renderCapital();
+    App.renderWizardBanner(pending.wizard);
+    App.message(data.errors ? 'آخرین دریافت بازار با خطا مواجه شد: ' +
+      App.errorSummary(data.errors) : '');
+    return true;
+  };
+
+  App.hasPendingRender = function () { return !!App.state.pendingData; };
+
+  App.flushPending = function () {
+    if (!App.state.pendingData) return false;
+    if (App.blockingInteraction()) { App.queueRender(); return false; }
+    return App.applyPending();
+  };
+
 
   App.helpIcon = term => '<span class="help" tabindex="0" role="button" data-help="' + term +
     '" aria-label="توضیح ' + App.esc(term) + '" title="' + App.esc(HELP[term] || '') + '">؟</span>';
@@ -290,11 +395,13 @@
   };
 
   App.setView = function (view, save) {
+    const changed = App.state.view !== view;
     App.state.view = view;
     if ($('viewSimple')) $('viewSimple').setAttribute('aria-pressed', String(view === 'simple'));
     if ($('viewAdvanced')) $('viewAdvanced').setAttribute('aria-pressed', String(view === 'advanced'));
     if (save) App.saveUi({ view: view });
-    if (App.state.data) App.renderTable();
+    // Only a real change re-renders; applyUi runs on every preference save.
+    if (changed && App.state.data) App.renderTable();
   };
 
   // ------------------------------------------------------------------- summary
@@ -308,36 +415,86 @@
     const rateSource = conversion
       ? App.exchangeLabel(conversion.exchange) + ' · ' + (conversion.side || '') + ' · ' + App.fmtTime(conversion.timestamp)
       : 'داده تتر/تومان در دسترس نیست';
-    const cards = [
-      ['فرصت‌های سودده', App.fmt(summary.profitable_count || 0), (summary.usable_count || 0) + ' ردیف قابل محاسبه'],
-      ['بهترین فرصت', best ? App.fmtPct(best.net_pct) : '—',
+    const box = $('summaryCards');
+    if (!box) return;
+    // Built once: the four cards are static containers, only their text changes, so a
+    // press or hover on a chip below never sees its ancestor replaced.
+    if (!box.children.length) {
+      box.innerHTML =
+        '<article class="card"><h3>فرصت‌های سودده</h3><div class="big"></div><p class="muted small"></p></article>' +
+        '<article class="card"><h3>بهترین فرصت</h3><div class="big"></div><p class="muted small"></p></article>' +
+        '<article class="card"><h3>نرخ تتر / تومان</h3><div class="big"></div><p class="muted small"></p></article>' +
+        '<article class="card"><h3>وضعیت صرافی‌ها</h3><div class="chips" id="summaryChips"></div>' +
+        '<p class="muted small">برای جزئیات، روی هر چیپ بزنید.</p></article>';
+    }
+    const cards = box.querySelectorAll('article.card');
+    const values = [
+      [App.fmt(summary.profitable_count || 0), '', (summary.usable_count || 0) + ' ردیف قابل محاسبه'],
+      [best ? App.fmtPct(best.net_pct) : '—', best && best.net_pct > 0 ? 'positive' : '',
         best ? App.esc(best.coin) + ' · ' + App.esc(best.route_label || '') : 'در این لحظه فرصت سوددهی نیست'],
-      ['نرخ تتر / تومان', rateText, rateSource],
-      ['وضعیت صرافی‌ها', '', ''],
+      [rateText, '', rateSource],
     ];
-    const html = cards.slice(0, 3).map(card =>
-      '<article class="card"><h3>' + App.esc(card[0]) + '</h3><div class="big ' +
-      (card[0] === 'بهترین فرصت' && best && best.net_pct > 0 ? 'positive' : '') + '">' +
-      card[1] + '</div><p class="muted small">' + card[2] + '</p></article>').join('') +
-      '<article class="card"><h3>وضعیت صرافی‌ها</h3><div class="chips" id="summaryChips"></div>' +
-      '<p class="muted small">برای جزئیات، روی هر چیپ بزنید.</p></article>';
-    $('summaryCards').innerHTML = html;
-    const chips = $('summaryChips');
-    const exchanges = summary.exchanges || {};
-    Object.keys(exchanges).forEach(function (name) {
-      const info = exchanges[name];
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'chip ' + (info.state || 'unknown');
-      button.innerHTML = '<span class="dot ' + (info.state === 'ok' ? 'green' : info.state === 'error' ? 'red' : info.state === 'stale' ? 'yellow' : 'gray') + '"></span>' +
-        App.esc(info.label || App.exchangeLabel(name)) + ' · ' + App.esc({ ok: 'سالم', stale: 'قدیمی', error: 'خطا', unknown: 'نامعلوم' }[info.state] || info.state);
-      button.onclick = () => App.switchTab('diagnostics');
-      chips.appendChild(button);
+    values.forEach(function (value, index) {
+      const card = cards[index];
+      if (!card) return;
+      const big = card.querySelector('.big');
+      const note = card.querySelector('.muted');
+      const className = 'big ' + value[1];
+      if (big.textContent !== value[0]) big.textContent = value[0];
+      if (big.className !== className.trim()) big.className = className.trim();
+      if (note && note.innerHTML !== value[2]) note.innerHTML = value[2];
     });
-    if (!Object.keys(exchanges).length) chips.innerHTML = '<span class="muted small">هنوز تست نشده</span>';
+    App.renderSummaryChips(summary.exchanges || {});
     App.state.paused = !!summary.paused;
     App.updatePauseUi();
     App.renderChips();
+  };
+
+  // Keyed chips: an exchange chip keeps its node for the whole session, so clicking it is
+  // never swallowed by the next poll.
+  App.renderSummaryChips = function (exchanges) {
+    const chips = $('summaryChips');
+    if (!chips) return;
+    const names = Object.keys(exchanges);
+    App.state.chipEls = App.state.chipEls || new Map();
+    if (!names.length) {
+      chips.textContent = '';
+      App.state.chipEls = new Map();
+      const empty = document.createElement('span');
+      empty.className = 'muted small';
+      empty.textContent = 'هنوز تست نشده';
+      chips.appendChild(empty);
+      return;
+    }
+    if (chips.querySelector('span.muted')) chips.textContent = '';
+    names.forEach(function (name) {
+      const info = exchanges[name];
+      const label = App.exchangeLabel(name);
+      const state = info.state || 'unknown';
+      let chip = App.state.chipEls.get(name);
+      if (!chip) {
+        chip = document.createElement('button');
+        chip.type = 'button';
+        chip.dataset.exchange = name;
+        chips.appendChild(chip);
+        App.state.chipEls.set(name, chip);
+        chip.onclick = function () { App.switchTab('diagnostics'); };
+      }
+      const className = 'chip ' + state;
+      if (chip.className !== className) chip.className = className;
+      const dot = state === 'ok' ? 'green' : state === 'error' ? 'red'
+        : state === 'stale' ? 'yellow' : 'gray';
+      const text = (info.label || label) + ' · ' +
+        ({ ok: 'سالم', stale: 'قدیمی', error: 'خطا', unknown: 'نامعلوم' }[state] || state);
+      const html = '<span class="dot ' + dot + '"></span>' + App.esc(text);
+      if (chip.innerHTML !== html) chip.innerHTML = html;
+    });
+    Array.from(App.state.chipEls.keys()).forEach(function (name) {
+      if (names.indexOf(name) !== -1) return;
+      const chip = App.state.chipEls.get(name);
+      if (chip && chip.parentNode) chip.parentNode.removeChild(chip);
+      App.state.chipEls.delete(name);
+    });
   };
 
   App.renderChips = function () {
@@ -346,17 +503,34 @@
     const status = (data.summary || {}).exchanges || {};
     const container = $('exchangeChips');
     if (!container) return;
-    container.innerHTML = '';
-    Object.keys(status).forEach(function (name) {
+    App.state.topChipEls = App.state.topChipEls || new Map();
+    const names = Object.keys(status);
+    names.forEach(function (name) {
       const info = status[name];
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'chip ' + (info.state || 'unknown');
-      chip.setAttribute('aria-label', (info.label || name) + ' ' + (info.state || ''));
-      chip.innerHTML = '<span class="dot ' + (info.state === 'ok' ? 'green' : info.state === 'error' ? 'red' : info.state === 'stale' ? 'yellow' : 'gray') + '"></span>' +
+      const state = info.state || 'unknown';
+      let chip = App.state.topChipEls.get(name);
+      if (!chip) {
+        chip = document.createElement('button');
+        chip.type = 'button';
+        container.appendChild(chip);
+        App.state.topChipEls.set(name, chip);
+        chip.onclick = function () { App.switchTab('diagnostics'); };
+      }
+      const className = 'chip ' + state;
+      if (chip.className !== className) chip.className = className;
+      const aria = (info.label || name) + ' ' + state;
+      if (chip.getAttribute('aria-label') !== aria) chip.setAttribute('aria-label', aria);
+      const dot = state === 'ok' ? 'green' : state === 'error' ? 'red'
+        : state === 'stale' ? 'yellow' : 'gray';
+      const html = '<span class="dot ' + dot + '"></span>' +
         App.esc(info.label || App.exchangeLabel(name));
-      chip.onclick = () => App.switchTab('diagnostics');
-      container.appendChild(chip);
+      if (chip.innerHTML !== html) chip.innerHTML = html;
+    });
+    Array.from(App.state.topChipEls.keys()).forEach(function (name) {
+      if (names.indexOf(name) !== -1) return;
+      const chip = App.state.topChipEls.get(name);
+      if (chip && chip.parentNode) chip.parentNode.removeChild(chip);
+      App.state.topChipEls.delete(name);
     });
   };
 
@@ -503,12 +677,21 @@
     return '<tr class="row-open" data-key="' + App.esc(row.key) + '" tabindex="0" style="' + style + '">' + cells.join('') + '</tr>';
   };
 
-  App.renderTable = function (animate) {
+  App.TABLE_FIRST_PAGE = 200;
+
+  // The list is real data, but the DOM is patched, never rebuilt: a row keeps its node
+  // for the whole session and only the cells whose text really changed are rewritten.
+  App.renderTable = function () {
     const data = App.state.data;
     if (!data) return;
     const tbody = $('rows');
+    if (!tbody) return;
     const head = $('tableHead');
-    head.innerHTML = App.headHtml();
+    const headHtml = App.headHtml();
+    if (head && App.state.headSig !== headHtml) {
+      head.innerHTML = headHtml;
+      App.state.headSig = headHtml;
+    }
     const filters = App.readFilters();
     const rows = Sort.applyFilters(data.rows || [], filters);
     const maxAbs = rows.reduce(function (max, row) {
@@ -517,39 +700,153 @@
     }, 0);
     // Freeze means "do not reorder": an infinite hysteresis gap keeps the previous order.
     const gap = App.state.freeze ? Infinity : App.hysteresis();
-    let ordered = Sort.orderRows(rows, App.state.order, gap);
+    const ordered = Sort.orderRows(rows, App.state.order, gap);
     App.state.order = ordered;
     const byKey = new Map(rows.map(row => [row.key, row]));
     const list = ordered.map(key => byKey.get(key)).filter(Boolean);
-    const focusedKey = App.focusedRowKey();
-    const wasProfit = App.state.prevProfit;
-    const flashed = new Set(Sort.newlyProfitable(list, wasProfit));
+    const limit = Math.max(App.TABLE_FIRST_PAGE, Number(App.state.rowLimit) || 0);
+    const visible = list.slice(0, limit);
+
     $('loadingState').hidden = !App.state.loading;
-    $('emptyState').hidden = list.length > 0;
     if (!list.length) {
+      $('emptyState').hidden = false;
       $('emptyState').textContent = App.state.loading ? 'در حال دریافت قیمت‌ها…'
         : (data.errors ? 'دریافت داده ناموفق بود: ' + App.errorSummary(data.errors)
           : 'با این فیلترها ردیفی پیدا نشد. فیلترها را ساده‌تر کنید یا «به‌روزرسانی الان» را بزنید.');
-    }
-    if (!animate || !tbody.children.length || App.state.freeze || App.isHovering()) {
-      tbody.innerHTML = list.map((row, index) => App.rowHtml(row, index, maxAbs)).join('');
-      App.bindRows();
-      App.restoreRowFocus(focusedKey);
     } else {
-      App.animateTo(list, maxAbs);
+      $('emptyState').hidden = true;
     }
-    list.forEach(function (row, index) {
-      if (flashed.has(row.key)) {
-        const node = tbody.querySelector('[data-key="' + cssEscape(row.key) + '"]');
-        if (node) { node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 2400); }
+
+    // Nothing that decides a cell changed? Then touch no DOM at all.
+    const ui = App.state.ui || {};
+    const signature = JSON.stringify([App.state.view, App.selectedColumns(), maxAbs, limit,
+      list.length, ui.pins || [], ui.digits || 'fa', ui.font_scale || 'medium', visible]);
+    if (signature === App.state.tableSig) {
+      App.state.loading = false;
+      App.renderMoreRows(list.length, visible.length);
+      return;
+    }
+    const sorted = App.state.tableSig !== null
+      && (App.state.lastKeys || []).join('|') !== visible.map(row => row.key).join('|');
+    App.state.tableSig = signature;
+    App.state.lastKeys = visible.map(row => row.key);
+
+    const wasProfit = App.state.prevProfit;
+    const flashed = new Set(Sort.newlyProfitable(visible, wasProfit));
+    const els = App.state.rowEls;
+
+    visible.forEach(function (row, index) {
+      let node = els.get(row.key);
+      if (!node) {
+        node = document.createElement('tr');
+        node.className = 'row-open';
+        node.dataset.key = row.key;
+        node.setAttribute('tabindex', '0');
+        App.fillRow(node, row, index, maxAbs);
+        els.set(row.key, node);
+      } else {
+        App.patchRow(node, row, index, maxAbs);
+      }
+    });
+    // Rows that dropped out of the list (filter, cap) are the only ones removed.
+    const keep = new Set(visible.map(row => row.key));
+    Array.from(tbody.children).forEach(function (node) {
+      if (keep.has(node.dataset.key)) return;
+      els.delete(node.dataset.key);
+      node.remove();
+    });
+    // Reordering moves the pointer to another opportunity under the cursor, so it waits
+    // until the pointer has left the table (or nothing is pressed).
+    if (sorted && !App.isHovering() && !App.state.press) {
+      visible.forEach(function (row, index) {
+        const node = els.get(row.key);
+        const current = tbody.children[index];
+        if (!node || current === node) return;
+        tbody.insertBefore(node, current || null);
+      });
+    } else {
+      visible.forEach(function (row) {
+        const node = els.get(row.key);
+        if (node && node.parentNode !== tbody) tbody.appendChild(node);
+      });
+    }
+
+    flashed.forEach(function (key) {
+      const node = els.get(key);
+      if (node) {
+        node.classList.add('flash');
+        setTimeout(() => node.classList.remove('flash'), 2400);
       }
     });
     if (flashed.size) {
       App.message('فرصت جدید سودده پیدا شد: ' + Array.from(flashed).map(key => (byKey.get(key) || {}).coin).filter(Boolean).join('، '));
       App.alert(Array.from(flashed).map(key => byKey.get(key)).filter(Boolean));
     }
-    App.state.prevProfit = new Map(list.map(row => [row.key, row.net_quote]));
+    App.renderMoreRows(list.length, visible.length);
+    App.state.prevProfit = new Map(visible.map(row => [row.key, row.net_quote]));
     App.state.loading = false;
+  };
+
+  // "Show more" instead of a thousand rows in the DOM at once.
+  App.renderMoreRows = function (total, shown) {
+    const tbody = $('rows');
+    const wrap = tbody && tbody.closest ? tbody.closest('.table-wrap') : null;
+    if (!wrap) return;
+    const button = $('moreRows');
+    if (!button) return;
+    if (!button.dataset.ready) {
+      button.dataset.ready = '1';
+      button.onclick = function () {
+        App.state.rowLimit = (Number(App.state.rowLimit) || App.TABLE_FIRST_PAGE) + App.TABLE_FIRST_PAGE;
+        App.state.tableSig = null;
+        App.renderTable(false);
+        App.flushPending();
+      };
+    }
+    if (total > shown) {
+      button.hidden = false;
+      button.textContent = 'نمایش ' + App.fmt(Math.min(App.TABLE_FIRST_PAGE, total - shown)) +
+        ' ردیف بیشتر (' + App.fmt(shown) + ' از ' + App.fmt(total) + ')';
+    } else {
+      button.hidden = true;
+    }
+  };
+
+  const rowHolder = function (row, index, maxAbs) {
+    const holder = document.createElement('tbody');
+    holder.innerHTML = App.rowHtml(row, index, maxAbs);
+    return holder.firstElementChild;
+  };
+
+  App.fillRow = function (node, row, index, maxAbs) {
+    const fresh = rowHolder(row, index, maxAbs);
+    node.innerHTML = fresh.innerHTML;
+    const style = fresh.getAttribute('style');
+    if (style) node.setAttribute('style', style);
+    node.className = fresh.className;
+    node.dataset.key = row.key;
+    node.setAttribute('tabindex', '0');
+  };
+
+  // Cell-by-cell patch: identical cells are left untouched, and a cell that holds the
+  // pressed or focused element is skipped so the click can finish.
+  App.patchRow = function (node, row, index, maxAbs) {
+    const fresh = rowHolder(row, index, maxAbs);
+    const className = fresh.className;
+    if (node.className !== className) node.className = className;
+    const style = fresh.getAttribute('style') || '';
+    if ((node.getAttribute('style') || '') !== style) node.setAttribute('style', style);
+    const cells = node.children;
+    const freshCells = fresh.children;
+    for (let position = 0; position < freshCells.length; position += 1) {
+      const cell = cells[position];
+      const next = freshCells[position];
+      if (!cell) { node.appendChild(next.cloneNode(true)); continue; }
+      if (cell.isEqualNode(next)) continue;
+      if (App.nodeBusy(cell)) continue;
+      cell.replaceChildren.apply(cell, Array.from(next.childNodes).map(child => child.cloneNode(true)));
+    }
+    while (node.children.length > freshCells.length) node.removeChild(node.lastElementChild);
   };
 
   App.hysteresis = function () {
@@ -562,8 +859,8 @@
   }
   App.cssEscape = cssEscape;
 
-  // Hovering pauses the FLIP animation. The flag can stick after the table body is
-  // replaced under the pointer, so the live :hover state wins whenever it is available.
+  // Hovering no longer rebuilds anything; the flag only decides whether the list may be
+  // reordered under the pointer.
   App.isHovering = function () {
     const tbody = $('rows');
     try {
@@ -586,61 +883,34 @@
     if (node && typeof node.focus === 'function') node.focus();
   };
 
-  App.animateTo = function (list, maxAbs) {
+  // One delegated listener pair for the whole table body: no per-row handlers, so a
+  // re-render can never double-bind or lose a handler.
+  App.wireRows = function () {
+    if (App.state.rowsWired) return;
     const tbody = $('rows');
-    const before = new Map();
-    Array.from(tbody.children).forEach(function (node) {
-      before.set(node.dataset.key, node.getBoundingClientRect().top);
+    if (!tbody) return;
+    App.state.rowsWired = true;
+    tbody.addEventListener('click', function (event) {
+      const pin = event.target.closest ? event.target.closest('[data-pin]') : null;
+      if (pin) {
+        event.preventDefault();
+        event.stopPropagation();
+        App.togglePin(pin.dataset.pin);
+        return;
+      }
+      const row = event.target.closest ? event.target.closest('tr[data-key]') : null;
+      if (row) App.openDrawer(row.dataset.key);
     });
-    const existing = new Map(Array.from(tbody.children).map(node => [node.dataset.key, node]));
-    const fragment = document.createDocumentFragment();
-    list.forEach(function (row, index) {
-      const node = existing.get(row.key) || document.createElement('tr');
-      node.className = 'row-open';
-      node.dataset.key = row.key;
-      node.setAttribute('tabindex', '0');
-      node.setAttribute('style', '--row-bg:' + App.rowAccent(row, maxAbs));
-      const holder = document.createElement('tbody');
-      holder.innerHTML = App.rowHtml(row, index, maxAbs);
-      const fresh = holder.firstElementChild;
-      node.innerHTML = fresh.innerHTML;
-      fragment.appendChild(node);
+    tbody.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const row = event.target.closest ? event.target.closest('tr[data-key]') : null;
+      if (!row || event.target !== row) return;
+      event.preventDefault();
+      App.openDrawer(row.dataset.key);
     });
-    tbody.innerHTML = '';
-    tbody.appendChild(fragment);
-    Array.from(tbody.children).forEach(function (node) {
-      const start = before.get(node.dataset.key);
-      if (start == null || typeof node.getBoundingClientRect !== 'function') return;
-      const delta = start - node.getBoundingClientRect().top;
-      if (!delta) return;
-      node.style.transition = 'none';
-      node.style.transform = 'translateY(' + delta.toFixed(1) + 'px)';
-      requestAnimationFrame(function () {
-        node.style.transition = 'transform .35s ease';
-        node.style.transform = '';
-      });
-    });
-    App.bindRows();
   };
 
-  App.bindRows = function () {
-    const tbody = $('rows');
-    tbody.querySelectorAll('[data-pin]').forEach(function (button) {
-      button.onclick = function (event) {
-        event.stopPropagation();
-        App.togglePin(button.dataset.pin);
-      };
-    });
-    tbody.querySelectorAll('tr[data-key]').forEach(function (node) {
-      node.onclick = function () { App.openDrawer(node.dataset.key); };
-      node.onkeydown = function (event) {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          App.openDrawer(node.dataset.key);
-        }
-      };
-    });
-  };
+  App.bindRows = function () { App.wireRows(); };
 
   App.togglePin = function (coin) {
     const pins = (App.state.ui.pins || []).slice();
@@ -708,14 +978,18 @@
     const cfg = (App.state.data && App.state.data.scanner) || {};
     const box = $('capitalPresets');
     if (!box) return;
-    box.innerHTML = '';
-    CAPITAL_PRESETS.forEach(function (preset) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = preset.label;
-      button.onclick = () => App.applyCapital(preset.value, preset.currency);
-      box.appendChild(button);
-    });
+    // Created once. Rebuilding these six buttons on every poll is exactly what made a
+    // click on «۵۰ میلیون تومان» vanish when a refresh landed mid-press.
+    if (box.children.length !== CAPITAL_PRESETS.length) {
+      box.textContent = '';
+      CAPITAL_PRESETS.forEach(function (preset) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = preset.label;
+        button.onclick = () => App.applyCapital(preset.value, preset.currency);
+        box.appendChild(button);
+      });
+    }
     const currency = $('capitalCurrency').value || 'USDT';
     const value = currency === 'toman' ? cfg.capital_toman : cfg.capital_usdt;
     if (document.activeElement !== $('capitalInput')) {
@@ -760,28 +1034,21 @@
   };
 
   // ------------------------------------------------------------------ polling
+  // One request at a time: an overlapping poll would render twice and the older answer
+  // could overwrite the newer one.
   App.load = async function (showLoading) {
+    if (App.state.inflight) { App.state.queuedReload = true; return; }
+    App.state.inflight = true;
+    const seq = ++App.state.loadSeq;
     if (showLoading && !App.state.data) {
       App.state.loading = true;
       if ($('loadingState')) $('loadingState').hidden = false;
     }
     try {
       const [data, wizard] = await Promise.all([App.api('/api/overview'), App.api('/api/wizard')]);
-      App.state.data = data;
-      App.state.settings = data.settings;
-      if (!App.state.initialized) {
-        App.state.ui = data.ui;
-        App.applyUi();
-        App.writeFilters(data.ui.last_filter || {});
-        App.state.initialized = true;
-      }
-      App.renderSummary(data);
-      App.renderTable(true);
-      App.renderCapital();
-      App.renderWizardBanner(wizard);
-      App.message(data.errors ? 'آخرین دریافت بازار با خطا مواجه شد: ' +
-        App.errorSummary(data.errors) : '');
-      App.schedulePolling();
+      if (seq !== App.state.loadSeq) return;   // a newer load already started: drop this answer
+      App.state.pendingData = { data: data, wizard: wizard };
+      App.queueRender();
     } catch (error) {
       App.error(error);
       if ($('emptyState')) {
@@ -789,6 +1056,15 @@
         $('emptyState').textContent = 'ارتباط با سرور برنامه قطع است. صفحه را دوباره باز کنید.';
       }
       App.schedulePolling(true);
+    } finally {
+      App.state.inflight = false;
+      // Polling keeps running even while a render is deferred, so the data shown right
+      // after the user releases the mouse is the newest one.
+      App.schedulePolling();
+      if (App.state.queuedReload) {
+        App.state.queuedReload = false;
+        if (!App.state.paused) App.load(false);
+      }
     }
   };
 
@@ -952,7 +1228,14 @@
       App.renderTable(false);
       App.message(App.state.freeze ? 'ترتیب فهرست قفل شد.' : 'ترتیب فیلتر آزاد شد.');
     };
-    $('filters').oninput = function () { App.renderTable(false); };
+    // Typing coalesces into one patch per frame instead of one rebuild per keystroke.
+    $('filters').oninput = function () {
+      if (App.state.filterQueued) return;
+      App.state.filterQueued = true;
+      const run = function () { App.state.filterQueued = false; App.renderTable(false); };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+      else setTimeout(run, 0);
+    };
     $('filters').onchange = function () {
       const filters = App.readFilters();
       App.renderTable(false);
@@ -968,6 +1251,21 @@
     $('capitalInput').onchange = App.submitCapitalText;
     $('capitalInput').onkeydown = function (event) { if (event.key === 'Enter') { event.preventDefault(); App.submitCapitalText(); } };
     $('capitalCurrency').onchange = function () { App.renderCapital(); };
+    // ---- press tracking: a render never replaces what is being pressed or typed in
+    document.addEventListener('mousedown', function (event) { App.markPress(event.target); }, true);
+    document.addEventListener('pointerdown', function (event) { App.markPress(event.target); }, true);
+    ['mouseup', 'pointerup', 'touchend', 'click', 'contextmenu'].forEach(function (name) {
+      document.addEventListener(name, function () { App.clearPress(); }, true);
+    });
+    document.addEventListener('focusout', function () {
+      // Focus moves after this event, so the pending render waits for the next task.
+      setTimeout(function () { App.flushPending(); }, 0);
+    }, true);
+    window.addEventListener('blur', function () { App.state.press = null; App.flushPending(); });
+    document.addEventListener('visibilitychange', function () { App.flushPending(); });
+    App.wireRows();
+    App.wireWizardBanner();
+
     document.addEventListener('click', function (event) {
       const help = event.target.closest && event.target.closest('.help');
       if (help) { App.showHelp(help); event.preventDefault(); return; }
@@ -1006,7 +1304,10 @@
     });
     const tbody = $('rows');
     tbody.addEventListener('mouseenter', function () { App.state.hover = true; });
-    tbody.addEventListener('mouseleave', function () { App.state.hover = false; });
+    tbody.addEventListener('mouseleave', function () {
+      App.state.hover = false;
+      App.flushPending();   // the pointer left: apply the data that was held back
+    });
     window.addEventListener('resize', function () { App.hideHelp(); });
   };
 
@@ -1024,25 +1325,35 @@
     const banner = $('setupBanner');
     if (!banner) return;
     const missing = (wizard && wizard.missing) || [];
-    if (!missing.length) {
-      banner.hidden = true;
-      return;
-    }
-    const signature = missing.join('|');
-    $('setupMissing').textContent = 'موارد لازم: ' + missing.join('، ');
-    $('setupBannerAction').onclick = function () { if (App.openWizard) App.openWizard(1); };
-    // A dismissed notice stays closed for the same list of missing items, and comes back
-    // as soon as the list changes (e.g. one fee fewer or one fee more is still missing).
     const ui = App.state.ui || {};
+    const signature = missing.join('|');
     const dismissed = ui.setup_banner_dismissed || '';
-    if (dismissed === signature) {
+    const hidden = !missing.length || dismissed === signature;
+    // The banner (and its two buttons) is only touched when its state really changes.
+    const state = hidden ? 'hidden:' + signature : 'shown:' + signature;
+    App.state.bannerSig = signature;
+    if (App.state.bannerState === state) return;
+    App.state.bannerState = state;
+    if (hidden) {
       banner.hidden = true;
       return;
     }
+    $('setupMissing').textContent = 'موارد لازم: ' + missing.join('، ');
     banner.hidden = false;
+  };
+
+  // Wired once; the handlers read the current signature at click time.
+  App.wireWizardBanner = function () {
+    if (App.state.bannerWired) return;
+    App.state.bannerWired = true;
+    if ($('setupBannerAction')) {
+      $('setupBannerAction').onclick = function () { if (App.openWizard) App.openWizard(1); };
+    }
     if ($('setupBannerClose')) {
       $('setupBannerClose').onclick = function () {
-        banner.hidden = true;
+        $('setupBanner').hidden = true;
+        const signature = App.state.bannerSig || '';
+        App.state.bannerState = null;
         App.saveUi({ setup_banner_dismissed: signature }).catch(function () { /* optional */ });
         App.message('این پیام بسته شد. هر وقت خواستید از دکمه «راه‌اندازی» تنظیمات را کامل کنید.');
       };

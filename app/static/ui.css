@@ -254,6 +254,7 @@ table.rows tbody tr { background-color: var(--row-bg, transparent); }
   50% { box-shadow: inset 0 0 0 2px var(--green); }
 }
 .empty, .loading { padding: 26px; text-align: center; color: var(--muted); }
+.more-rows { display: block; margin: 10px auto 0; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 details.excluded summary { cursor: pointer; color: var(--muted); margin-top: 10px; }
 
