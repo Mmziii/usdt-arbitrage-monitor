@@ -99,3 +99,80 @@ def test_guide_page_is_static_and_linked():
         assert href in guide, href
     dashboard = (STATIC / 'dashboard.html').read_text(encoding='utf-8')
     assert 'href="/guide"' in dashboard
+
+
+NEW_HOME_ASSETS = ['home.html', 'home.css', 'home.js', 'fees.html', 'fees.js']
+
+
+def test_the_home_screen_is_the_main_page():
+    paths = {route.path for route in main.app.routes}
+    assert {'/', '/fees', '/dashboard', '/guide', '/settings'} <= paths
+
+
+def test_new_home_assets_are_bundled():
+    for name in NEW_HOME_ASSETS:
+        path = STATIC / name
+        assert path.is_file(), name
+        assert path.stat().st_size > 500, name
+
+
+def test_the_home_page_starts_with_every_dialog_closed():
+    html = (STATIC / 'home.html').read_text(encoding='utf-8')
+    dialogs = re.findall(r'<dialog[^>]*>', html)
+    assert dialogs, 'the page owns its dialogs'
+    for tag in dialogs:
+        assert ' open' not in tag, 'a dialog must never open on load: ' + tag
+    fees = (STATIC / 'fees.html').read_text(encoding='utf-8')
+    for tag in re.findall(r'<dialog[^>]*>', fees):
+        assert ' open' not in tag
+
+
+def test_the_home_page_is_persian_rtl_and_readable():
+    html = (STATIC / 'home.html').read_text(encoding='utf-8')
+    assert 'dir="rtl"' in html and 'lang="fa"' in html
+    assert len(re.findall(r'[\u0600-\u06ff]', html)) > 500
+    css = (STATIC / 'home.css').read_text(encoding='utf-8')
+    assert re.search(r'html\s*\{\s*font-size:\s*1[6-9]px', css), 'base font must be >= 16px'
+    assert 'prefers-color-scheme' in css and "data-theme='dark'" in css
+    assert re.search(r'\[\s*hidden\s*\]\s*\{[^}]*display\s*:\s*none\s*!important', css)
+    assert css.index('[hidden]') < css.index('.banner {')
+    assert "url('/static/Vazirmatn-Regular.woff2')" in css
+
+
+def test_home_and_fees_have_no_external_resources():
+    for name in ['home.html', 'home.css', 'home.js', 'fees.html', 'fees.js']:
+        text = (STATIC / name).read_text(encoding='utf-8')
+        assert 'http://' not in text, name
+        assert 'https://' not in text or name in ('fees.js', 'home.js'), name
+        assert '@import' not in text, name
+    # the fee pages link to the exchange's own page at runtime, never at build time
+    assert 'https://' not in (STATIC / 'home.html').read_text(encoding='utf-8')
+
+
+def test_every_id_used_by_the_home_scripts_exists():
+    for html_name, script_name in [('home.html', 'home.js'), ('fees.html', 'fees.js')]:
+        html = (STATIC / html_name).read_text(encoding='utf-8')
+        script = (STATIC / script_name).read_text(encoding='utf-8')
+        present = set(re.findall(r'id="([^"]+)"', html))
+        used = set(re.findall(r"\$\('([A-Za-z][A-Za-z0-9_-]*)'\)", script))
+        generated = set(re.findall(r"\.id = '([A-Za-z][A-Za-z0-9_-]*)'", script))
+        missing = sorted(used - present - generated)
+        assert not missing, f'{script_name} uses ids that do not exist: {missing}'
+
+
+def test_navigation_points_at_every_area():
+    html = (STATIC / 'home.html').read_text(encoding='utf-8')
+    for href in ['href="/"', 'href="/fees"', 'href="/guide"', 'href="/settings"',
+                 'href="/dashboard"']:
+        assert href in html, href
+    assert 'ابزارهای پیشرفته' in html
+    fees = (STATIC / 'fees.html').read_text(encoding='utf-8')
+    assert 'href="/fees"' in fees and 'aria-current="page"' in fees
+
+
+def test_the_guide_explains_the_new_flow_and_the_risks():
+    guide = (STATIC / 'guide.html').read_text(encoding='utf-8')
+    assert '<script' not in guide
+    for phrase in ['برو', 'صبر کن', 'نامطمئن', 'کارمزد', 'واژه‌نامه', 'ریسک']:
+        assert phrase in guide, phrase
+    assert 'href="/"' in guide and 'href="/settings"' in guide

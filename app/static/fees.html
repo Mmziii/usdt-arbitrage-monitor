@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fa" dir="rtl" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>کارمزدها — رصد آربیتراژ</title>
+<meta name="description" content="کارمزد برداشت هر ارز و شبکه، با تاریخ و میزان اطمینان؛ بدون حدس و بدون ورود به حساب صرافی.">
+<link rel="stylesheet" href="/static/home.css">
+</head>
+<body>
+<a class="skip" href="#main">رفتن به محتوای اصلی</a>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">٪</span>
+    <div>
+      <h1>کارمزدها</h1>
+      <p class="muted">هر کارمزد با تاریخ و میزان اطمینان؛ عدد حدسی وارد نمی‌کنیم.</p>
+    </div>
+  </div>
+  <nav class="nav" aria-label="صفحه‌های اصلی">
+    <a href="/">خانه</a>
+    <a href="/fees" aria-current="page">کارمزدها</a>
+    <a href="/guide">راهنما</a>
+    <a href="/settings">تنظیمات</a>
+    <a href="/dashboard" class="advanced">ابزارهای پیشرفته</a>
+  </nav>
+  <div class="statusbar">
+    <button id="themeBtn" class="icon" title="روشن / تاریک">◐</button>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+  <section class="card">
+    <div class="card-head">
+      <h2>وضعیت کارمزدها</h2>
+      <div class="actions" style="margin-top:0">
+        <button id="autoBtn" class="btn">خواندن خودکار از صرافی‌ها</button>
+        <button id="assistantBtn" class="primary">دستیار کارمزد</button>
+      </div>
+    </div>
+    <div id="feesSummary" class="setup-row"></div>
+    <p id="feesNeeded" class="muted small"></p>
+    <p class="hint">فقط کارمزد ارزهایی پرسیده می‌شود که برای مسیرهای با اختلاف قیمت بالا لازم‌اند.
+      تا کارمزد برداشت یک ارز معلوم نشود، برنامه برای آن مسیر «سود خالص» نمی‌گوید.</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>کارمزد برداشت ثبت‌شده</h2>
+      <span class="muted small" id="feesCount"></span>
+    </div>
+    <div id="feesBody"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>کارمزد معامله (خرید و فروش)</h2>
+      <a href="/settings" class="btn">تغییر در تنظیمات</a>
+    </div>
+    <div id="tradingBody"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>منبع هر صرافی</h2>
+      <span class="muted small">صادقانه: چه چیزی خودکار است و چه چیزی نیست</span>
+    </div>
+    <div id="sourcesBody"></div>
+  </section>
+
+  <footer class="disclaimer">
+    کارمزدها را همیشه می‌توانید از صفحه رسمی خود صرافی ببینید و با «دستیار کارمزد» بچسبانید.
+    این برنامه نه وارد حساب می‌شود، نه سفارش می‌گذارد و نه عددی را از خودش می‌سازد.
+  </footer>
+</main>
+
+<dialog id="feeDialog" class="dialog wide" aria-labelledby="feeDialogTitle">
+  <div class="dialog-head">
+    <h2 id="feeDialogTitle">دستیار کارمزد</h2>
+    <button id="feeClose" class="icon" aria-label="بستن">✕</button>
+  </div>
+  <div class="dialog-body">
+    <div class="field">
+      <label for="feeExchange">صرافی</label>
+      <select id="feeExchange">
+        <option value="nobitex">نوبیتکس</option>
+        <option value="wallex">والکس</option>
+        <option value="bitunix">بیت‌یونیکس</option>
+      </select>
+    </div>
+    <p class="hint">صفحه رسمی کارمزد <a id="feePageLink" href="/guide" target="_blank" rel="noopener">در اینجا</a>
+      باز می‌شود؛ متن جدول کارمزد را از همان صفحه کپی کنید و پایین بچسبانید.</p>
+    <div class="field">
+      <label for="feeText">متن کارمزد یا فایل CSV</label>
+      <textarea id="feeText" rows="8" placeholder="هر خط: ارز، شبکه، کارمزد برداشت، حداقل برداشت — مثلاً:
+USDT  TRC20  1  10
+BTC  BTC  0.0002" spellcheck="false"></textarea>
+      <span class="hint">فرمت CSV هم قبول است: <span class="num">coin,network,fee,minimum</span></span>
+    </div>
+    <div class="actions">
+      <button id="feePreviewBtn" class="primary">بررسی متن</button>
+      <button id="feeSaveBtn" class="btn" disabled>ذخیره ردیف‌های درست</button>
+    </div>
+    <div id="feeErrors"></div>
+    <div id="feePreviewBody"></div>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<noscript><p class="wrap">برای دیدن کارمزدها، جاوااسکریپت مرورگر باید روشن باشد.</p></noscript>
+<script src="/static/fees.js"></script>
+</body>
+</html>

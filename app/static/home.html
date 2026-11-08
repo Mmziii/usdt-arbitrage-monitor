@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="fa" dir="rtl" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>رصد آربیتراژ — خانه</title>
+<meta name="description" content="آیا الان وقت خوبی برای آربیتراژ تتر است؟ سود خالص بعد از همه کارمزدها، به زبان ساده.">
+<link rel="stylesheet" href="/static/home.css">
+</head>
+<body>
+<a class="skip" href="#main">رفتن به محتوای اصلی</a>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">⇄</span>
+    <div>
+      <h1>رصد آربیتراژ</h1>
+      <p class="muted" id="tagline">تتر و ارز دیجیتال بین صرافی‌های ایرانی و بیت‌یونیکس</p>
+    </div>
+  </div>
+
+  <nav class="nav" aria-label="صفحه‌های اصلی">
+    <a href="/" aria-current="page">خانه</a>
+    <a href="/fees">کارمزدها</a>
+    <a href="/guide">راهنما</a>
+    <a href="/settings">تنظیمات</a>
+    <a href="/dashboard" class="advanced">ابزارهای پیشرفته</a>
+  </nav>
+
+  <div class="statusbar">
+    <button id="connectionBtn" class="status" data-state="waiting" title="وضعیت اتصال را در عیب‌یابی ببینید">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="connectionText">در حال اتصال…</span>
+    </button>
+    <span id="countdown" class="pill" title="به‌روزرسانی بعدی">—</span>
+    <button id="pauseBtn" class="ghost" aria-pressed="false">توقف</button>
+    <button id="themeBtn" class="icon" title="روشن / تاریک">◐</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden>
+  <div>
+    <strong>برای دیدن عدد دقیق، این‌ها لازم است:</strong>
+    <ul class="items" id="bannerItems"></ul>
+  </div>
+  <button id="bannerClose" class="ghost" aria-label="بستن این پیام">بستن</button>
+</div>
+
+<main class="wrap" id="main">
+
+  <section class="card" id="setupCard" aria-labelledby="setupTitle">
+    <div class="card-head">
+      <h2 id="setupTitle">وضعیت شما</h2>
+      <button id="setupEdit" class="btn">تغییر</button>
+    </div>
+    <div id="setupSummary" class="setup-row"></div>
+    <p class="hint" id="setupHint">این‌ها فقط برای فیلتر کردن مسیرهای قابل انجام استفاده می‌شوند؛ هیچ‌جا وارد حساب صرافی نمی‌شویم.</p>
+  </section>
+
+  <section class="card result" id="resultCard" aria-labelledby="resultTitle">
+    <h2 id="resultTitle">الان وقت خوبی است؟</h2>
+
+    <div id="resultLoading" class="muted">در حال خواندن قیمت‌ها و کارمزدها…</div>
+
+    <div id="resultBody" hidden>
+      <div id="resultBadge" class="badge tone-unknown">
+        <span id="verdictIcon" aria-hidden="true">…</span>
+        <span id="verdictLabel">—</span>
+      </div>
+      <p class="lead" id="verdictText">—</p>
+      <p class="muted small" id="verdictRoute"></p>
+
+      <div class="numbers" id="numbersGrid">
+        <div class="good"><b id="netToman" class="num">—</b><small>سود خالص بعد از همه کارمزدها (تومان)</small></div>
+        <div><b id="netPct" class="num">—</b><small>درصد سود خالص</small></div>
+        <div><b id="profitUsdt" class="num">—</b><small>سود به تتر</small></div>
+        <div><b id="totalTime" class="num">—</b><small>زمان تقریبی کل مسیر</small></div>
+        <div><b id="confidenceLevel">—</b><small>اطمینان به اعداد</small></div>
+      </div>
+
+      <ul class="checks" id="checks" aria-label="دلیل این نتیجه"></ul>
+
+      <div class="actions">
+        <button id="receiptBtn" class="primary">از صفر تا صد: چه کار کنم؟</button>
+        <button id="refreshBtn" class="btn">به‌روزرسانی قیمت‌ها</button>
+        <a class="ghost btn" href="/fees">کارمزدها را بررسی کن</a>
+      </div>
+      <p class="hint" id="estimateNote">همه اعداد بر اساس قیمت‌های لحظه‌ای و کارمزدهای ثبت‌شده تخمین زده شده‌اند؛ تضمینی نیستند.</p>
+    </div>
+
+    <div id="resultError" class="muted" hidden></div>
+  </section>
+
+  <section class="card" id="emptyCard" hidden aria-labelledby="emptyTitle">
+    <div class="empty">
+      <div class="big" aria-hidden="true">🌙</div>
+      <h2 id="emptyTitle">فعلاً فرصت سوددهی نیست</h2>
+      <p id="emptyText">همان‌طور که بازار حرکت کند، بهترین فرصت‌ها همین‌جا نشان داده می‌شوند.</p>
+      <p class="muted small" id="emptyLast"></p>
+      <div class="notify-row">
+        <label class="choice"><input type="checkbox" id="notifyToggle"> وقتی فرصت پیدا شد خبرم کن</label>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="gaugeCard" aria-labelledby="gaugeTitle">
+    <div class="card-head">
+      <h2 id="gaugeTitle">این فرصت چقدر خوب است؟</h2>
+      <span class="muted small">مقایسه با تاریخچه ثبت‌شده، نه پیش‌بینی</span>
+    </div>
+    <div id="gaugeBody"></div>
+  </section>
+
+  <section class="card" id="receiptSection" hidden aria-labelledby="receiptTitle">
+    <div class="card-head">
+      <h2 id="receiptTitle">از صفر تا صد</h2>
+      <span class="muted small" id="receiptMode"></span>
+    </div>
+    <div id="receiptInline" class="receipt"></div>
+    <div class="actions">
+      <button id="copyInline" class="btn">کپی به‌صورت متن</button>
+      <button id="simulateInline" class="btn">ذخیره به‌عنوان معامله آزمایشی</button>
+      <a id="csvInline" class="btn" href="/api/receipt.csv" download>خروجی CSV</a>
+    </div>
+  </section>
+
+  <section id="othersSection" hidden aria-labelledby="othersTitle">
+    <div class="card-head">
+      <h2 id="othersTitle">گزینه‌های دیگر</h2>
+      <span class="muted small">با کلیک، همان رسید کامل باز می‌شود</span>
+    </div>
+    <div class="others-grid" id="othersGrid"></div>
+  </section>
+
+  <section class="card" id="feesHint" hidden aria-labelledby="feesHintTitle">
+    <div class="card-head">
+      <h2 id="feesHintTitle">کارمزدها</h2>
+      <a href="/fees" class="btn" id="feesLink">رفتن به کارمزدها</a>
+    </div>
+    <p id="feesText" class="muted"></p>
+    <p class="hint">فقط کارمزد ارزهایی را می‌پرسیم که در مسیرهای با اختلاف قیمت بالا لازم‌اند.</p>
+  </section>
+
+  <footer class="disclaimer" id="disclaimer">
+    همه اعداد تخمینی و بر اساس قیمت‌های لحظه‌ای هستند؛ سود تضمین‌شده وجود ندارد و این ابزار
+    مشاوره مالی نمی‌دهد. قیمت در زمان انتقال تغییر می‌کند، قواعد و محدودیت‌های هر صرافی و
+    وضعیت قانونی و مالیاتی خودتان را جداگانه بررسی کنید و اول با مبلغ کم آزمایش کنید.
+    <br>
+    <a href="/guide">راهنمای کامل</a> · <a href="/fees">کارمزدها</a> ·
+    <a href="/dashboard">ابزارهای پیشرفته</a> · <a href="/classic">نمای قدیمی</a>
+  </footer>
+</main>
+
+<!-- The wizard is only opened by the user (or by the setup button), never on load. -->
+<dialog id="wizard" class="dialog" aria-labelledby="wizardTitle">
+  <div class="dialog-head">
+    <h2 id="wizardTitle">راه‌اندازی</h2>
+    <button id="wizardClose" class="icon" aria-label="بستن">✕</button>
+  </div>
+  <div class="dialog-body">
+    <div class="wizard-steps" id="wizardSteps" aria-hidden="true">
+      <span class="on"></span><span></span><span></span>
+    </div>
+    <div id="wizardBody"></div>
+    <div class="wizard-nav">
+      <button id="wizardBack" class="ghost" hidden>مرحله قبل</button>
+      <span></span>
+      <button id="wizardNext" class="primary">بعدی</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="receiptDialog" class="dialog wide" aria-labelledby="receiptDialogTitle">
+  <div class="dialog-head">
+    <h2 id="receiptDialogTitle">رسید مسیر</h2>
+    <button id="receiptClose" class="icon" aria-label="بستن">✕</button>
+  </div>
+  <div class="dialog-body">
+    <div id="receiptBody" class="receipt"></div>
+    <div class="actions">
+      <button id="copyReceipt" class="btn">کپی به‌صورت متن</button>
+      <button id="simulateBtn" class="btn">ذخیره به‌عنوان معامله آزمایشی</button>
+      <a id="csvLink" class="btn" href="/api/receipt.csv" download>خروجی CSV</a>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<noscript>
+  <p class="wrap">برای دیدن اعداد، جاوااسکریپت مرورگر باید روشن باشد.</p>
+</noscript>
+<script src="/static/home.js"></script>
+</body>
+</html>
