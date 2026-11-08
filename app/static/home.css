@@ -196,9 +196,11 @@ button { font-family: inherit; font-size: .95rem; }
   color: var(--text);
   padding: 10px 16px;
   cursor: pointer;
-  transition: transform .08s ease, background .15s ease;
+  transition: background .15s ease, border-color .15s ease;
 }
-.btn:hover, .ghost:hover, .primary:hover { transform: translateY(-1px); }
+/* No hover lift: a control that shifts up 1px while the pointer arrives makes a click
+   aimed at its bottom edge land on the page instead of the button. */
+.btn:hover, .ghost:hover, .primary:hover { border-color: var(--brand); }
 .primary { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 700; }
 .primary:hover { background: color-mix(in srgb, var(--brand) 85%, #000); }
 .ghost { background: transparent; }
