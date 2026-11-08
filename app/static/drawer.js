@@ -9,6 +9,9 @@
   App.openDrawer = async function (key) {
     const drawer = $('drawer');
     if (!drawer) return;
+    // A slow answer for a row the user has already left must not open the drawer again.
+    App.state.drawerSeq = (App.state.drawerSeq || 0) + 1;
+    const seq = App.state.drawerSeq;
     App.state.drawerKey = key;
     App.state.drawerTab = 'breakdown';
     App.showLayer(drawer, '#drawerClose');
@@ -17,6 +20,7 @@
     $('drawerSub').textContent = '';
     try {
       const detail = await App.api('/api/overview/detail?key=' + encodeURIComponent(key));
+      if (seq !== App.state.drawerSeq || App.state.drawerKey !== key) return;
       App.state.drawer = detail;
       App.renderDrawerHead();
       App.renderDrawerTab('breakdown');
@@ -30,6 +34,7 @@
 
   App.closeDrawer = function () {
     const drawer = $('drawer');
+    App.state.drawerSeq = (App.state.drawerSeq || 0) + 1;
     const wasOpen = App.isLayerOpen(drawer);
     App.hideLayer(drawer);
     App.state.drawerKey = null;

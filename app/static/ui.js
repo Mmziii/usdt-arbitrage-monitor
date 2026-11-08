@@ -1008,6 +1008,8 @@
   };
 
   App.applyCapital = async function (value, currency) {
+    if (App.state.capitalBusy) return;   // one save per press
+    App.state.capitalBusy = true;
     try {
       const cfg = Object.assign({}, App.state.data.scanner);
       const rate = (App.state.data.summary.conversion || {}).bid;
@@ -1025,6 +1027,7 @@
       App.renderCapital();
       await App.load(true);
     } catch (error) { App.error(error); }
+    finally { App.state.capitalBusy = false; }
   };
 
   App.submitCapitalText = async function () {
@@ -1117,12 +1120,29 @@
   };
 
   App.refreshNow = async function () {
+    const button = $('refreshButton');
+    // Feedback before the request starts, and one request per press: a second click
+    // while the first is running is ignored instead of blocking the button.
+    if (button && button.dataset.busy === '1') return;
+    if (button) {
+      button.dataset.busy = '1';
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+    }
     try {
       App.message('در حال به‌روزرسانی…');
       await App.api('/api/overview/refresh', { method: 'POST' });
       await App.load(false);
       App.message('به‌روزرسانی انجام شد · ' + App.fmtTime(Date.now() / 1000));
     } catch (error) { App.error(error); }
+    finally {
+      // App.api aborts after its own timeout, so this always runs.
+      if (button) {
+        button.dataset.busy = '0';
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+      }
+    }
   };
 
   // -------------------------------------------------------------------- tabs

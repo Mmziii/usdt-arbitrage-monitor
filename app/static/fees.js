@@ -44,11 +44,27 @@ const Fees = (() => {
     }
   }
 
+  // A request that never answers must not leave a button disabled for ever.
+  const API_TIMEOUT_MS = 15000;
+
   async function api(path, options) {
-    const response = await fetch(path, {
-      headers: { 'Content-Type': 'application/json' },
-      ...(options || {}),
-    });
+    const request = { headers: { 'Content-Type': 'application/json' }, ...(options || {}) };
+    let timer = null;
+    if (!request.signal && typeof AbortController === 'function') {
+      const controller = new AbortController();
+      request.signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    }
+    let response;
+    try {
+      response = await fetch(path, request);
+    } catch (error) {
+      if (timer) clearTimeout(timer);
+      throw new Error(error && error.name === 'AbortError'
+        ? 'پاسخ سرور دیر رسید؛ دوباره تلاش کنید.'
+        : 'ارتباط با سرور برنامه برقرار نشد؛ دوباره تلاش کنید.');
+    }
+    if (timer) { clearTimeout(timer); timer = null; }
     let body = null;
     try { body = await response.json(); } catch (error) { body = null; }
     if (!response.ok) {

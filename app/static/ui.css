@@ -271,6 +271,8 @@ details.excluded summary { cursor: pointer; color: var(--muted); margin-top: 10p
   position: fixed; z-index: 80; max-width: 320px; background: var(--surface);
   border: 1px solid var(--accent); border-radius: 12px; padding: 10px 12px;
   box-shadow: var(--shadow); font-size: .85rem;
+  /* Read-only tooltip: clicks pass through to whatever sits underneath it. */
+  pointer-events: none;
 }
 
 .drawer {
