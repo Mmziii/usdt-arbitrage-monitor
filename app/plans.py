@@ -34,6 +34,11 @@ def _fmt(value, digits=6):
         return str(value)
 
 
+def venue_for(route, stage):
+    """Public alias: which exchange performs a stage of a route."""
+    return _venue(route, stage)
+
+
 def build_plan(row, network=None, capital=None):
     """Turn a calculated row into numbered Persian steps and a checklist.
 

@@ -30,9 +30,13 @@ from .adapters import ADAPTERS, EXCHANGE_LABELS, public_depth
 from .amounts import AmountError, parse_amount
 from .diagnostics import build as diagnostics_build, describe
 from .hub import Hub
+from . import decision as decision_engine
+from . import fee_confidence, fee_sources, fee_text, gauge, receipt as receipt_builder
+from . import setup as setup_model
 from .journal import JournalError, export_csv as journal_csv, validate as validate_journal
-from .net import Gateway, Monitor, budget, budgets
-from .plans import build_plan
+from .fee_sources import DEFAULT_FEE_PAGES
+from .net import DEFAULT_AGENT, Gateway, Monitor, budget, budgets
+from .plans import build_plan, venue_for
 from .simulation import SimulationError, create as create_simulation_record
 from .simulation import public as public_simulation
 from .simulation import settle as settle_simulation
@@ -68,9 +72,17 @@ class AppSettings(BaseModel):
     bitunix: OptionalTradingFees = OptionalTradingFees()
     bitunix_usdt: OptionalTradingFees = OptionalTradingFees()
     proxy_url: Optional[str] = None
-    user_agent: str = Field(default='TraderBot/USDTMonitor-2.0 (+read-only)', min_length=3, max_length=200)
+    user_agent: str = Field(default=DEFAULT_AGENT, min_length=3, max_length=200)
+    # Nobitex documents a bot style User-Agent and its CDN rejects some library defaults,
+    # so this one is separately configurable. Empty means "use the general one".
+    nobitex_user_agent: Optional[str] = Field(default=None, max_length=200)
     max_timestamp_age_seconds: int = Field(default=120, ge=10, le=3600)
     clock_skew_warning_seconds: int = Field(default=60, ge=10, le=3600)
+    # A fee typed by hand is not wrong forever: after this many days the UI asks the user
+    # to check it again. Nothing is ever refreshed silently.
+    fee_stale_days: int = Field(default=14, ge=1, le=365)
+    # Best-known official fee pages; the user can edit them. The Fee Assistant opens these.
+    fee_pages: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_FEE_PAGES))
 
     fee_tiers: list[Tier] = []
     current_tiers: dict[str, str] = {}
@@ -93,6 +105,31 @@ class AppSettings(BaseModel):
             raise ValueError('User-Agent نامعتبر است')
         return value
 
+    @field_validator('nobitex_user_agent')
+    @classmethod
+    def valid_nobitex_agent(cls, value):
+        if value in (None, ''):
+            return None
+        value = value.strip()
+        if '\n' in value or '\r' in value:
+            raise ValueError('User-Agent نوبیتکس نامعتبر است')
+        return value
+
+    @field_validator('fee_pages')
+    @classmethod
+    def valid_fee_pages(cls, value):
+        clean = {}
+        for name, url in (value or {}).items():
+            if name not in ('wallex', 'nobitex', 'bitunix'):
+                continue
+            url = str(url or '').strip()
+            if not url:
+                continue
+            if not re.match(r'^https?://[^\s]+$', url):
+                raise ValueError('آدرس صفحه کارمزد باید با http:// یا https:// شروع شود')
+            clean[name] = url[:300]
+        return clean
+
     @model_validator(mode='after')
     def unique_tiers(self):
         keys = [(t.exchange, t.quote, t.name) for t in self.fee_tiers]
@@ -110,7 +147,8 @@ Settings = AppSettings
 _ENV_DEFAULTS = {
     'refresh_seconds': int(os.getenv('REFRESH_SECONDS', '10')),
     'proxy_url': os.getenv('PROXY_URL') or None,
-    'user_agent': os.getenv('USER_AGENT') or 'TraderBot/USDTMonitor-2.0 (+read-only)',
+    'user_agent': os.getenv('USER_AGENT') or DEFAULT_AGENT,
+    'nobitex_user_agent': os.getenv('NOBITEX_USER_AGENT') or None,
     'max_timestamp_age_seconds': int(os.getenv('MAX_TIMESTAMP_AGE', '120')),
     'clock_skew_warning_seconds': int(os.getenv('CLOCK_SKEW_WARNING', '60')),
 }
@@ -118,7 +156,9 @@ settings = Settings(**{**_ENV_DEFAULTS, **(store.settings() or {})})
 books, errors, manual = {}, {}, {}
 wake = asyncio.Event()
 monitor = Monitor()
-gateway = Gateway(monitor=monitor, user_agent=settings.user_agent, proxy=settings.proxy_url)
+gateway = Gateway(monitor=monitor, user_agent=settings.user_agent, proxy=settings.proxy_url,
+                  exchange_agents={'nobitex': settings.nobitex_user_agent})
+
 scanner = Scanner(store, gateway)
 tracker = OpportunityTracker(store)
 store.init_ui()
@@ -168,12 +208,35 @@ async def scan_loop():
         await asyncio.sleep(scanner.config()['interval'])
 
 
+_best_recorded_at = 0.0
+
+
+def remember_best():
+    """Store this scan's best net % so the gauge has a history to compare against.
+
+    At most one sample per minute: the gauge compares positions in time, not request counts.
+    """
+    global _best_recorded_at
+    now = time.time()
+    if now - _best_recorded_at < 60:
+        return
+    try:
+        cfg = hub.config()
+        rows = hub.rows(settings, cfg)
+        store.record_best(now, [row for row in rows if row.get('net_pct') is not None])
+        _best_recorded_at = now
+    except (ValueError, KeyError, TypeError):
+        pass
+
+
 async def hub_loop():
     """Bulk overview scan every `interval` seconds; hot-row depth every `depth_interval`."""
     while True:
         try:
             async with gateway.make_client() as client:
                 await hub.scan(client)
+            remember_best()
+            await refresh_automatic_fees()
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             hub.last_error = str(exc) or 'داده بازار نامعتبر بود'
         await asyncio.sleep(max(1, int(hub.config().get('depth_interval', 5))))
@@ -246,7 +309,19 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.get('/')
 def index():
+    """The one question that matters: is now a good moment?"""
+    return FileResponse(static / 'home.html')
+
+
+@app.get('/dashboard')
+def dashboard_page():
+    """The full table, kept as an advanced tool behind the home screen."""
     return FileResponse(static / 'dashboard.html')
+
+
+@app.get('/fees')
+def fees_page():
+    return FileResponse(static / 'fees.html')
 
 
 @app.get('/classic')
@@ -274,7 +349,8 @@ def put_settings(value: Settings):
     global settings
     settings = value
     store.save_settings(value.model_dump())
-    gateway.configure(user_agent=value.user_agent, proxy=value.proxy_url)
+    gateway.configure(user_agent=value.user_agent, proxy=value.proxy_url,
+                      exchange_agents={'nobitex': value.nobitex_user_agent})
     hub.invalidate()
     wake.set()
     return settings
@@ -368,7 +444,15 @@ class ScannerSettings(BaseModel):
     row_modes: dict[str, Literal['transfer', 'prefunded']] = {}
     safety_margin: float = Field(default=.3, ge=0, le=100, allow_inf_nan=False)
     coin_margins: dict[str, float] = {}
-    transfer_minutes: dict[str, Optional[float]] = {'default': None, 'TRC20': None, 'BEP20': None, 'ERC20': None}
+    # Rough, clearly-labelled starting points. They are editable and the UI always says
+    # "تقریبی"; nothing here is measured.
+    transfer_minutes: dict[str, Optional[float]] = {'default': 60, 'TRC20': 5, 'BEP20': 5,
+                                                    'ERC20': 10, 'BTC': 60, 'TON': 5}
+    setup: dict = {}
+    other_costs_toman: float = Field(default=0, ge=0, le=1e12, allow_inf_nan=False)
+    other_costs_note: str = Field(default='', max_length=200)
+    fee_candidate_limit: int = Field(default=10, ge=1, le=50)
+    gauge_days: int = Field(default=7, ge=1, le=30)
     balances: dict[str, dict[str, Optional[float]]] = {}
     rebalance_trades: int = Field(default=10, ge=1, le=1000000)
     close_confirmations: int = Field(default=2, ge=1, le=100)
@@ -525,7 +609,7 @@ UI_DEFAULTS = {
     'bitunix_batch_note': True,
     # Signature of the "setup is incomplete" banner the user closed, so a dismissed
     # notice stays closed until the list of missing items actually changes.
-    'setup_banner_dismissed': '',
+    'setup_banner_dismissed': '', 'fees_auto_at': 0,
 }
 
 
@@ -663,6 +747,11 @@ def api_diagnostics():
                                 extra={
                                     'proxy': mask_proxy(settings.proxy_url),
                                     'user_agent': settings.user_agent,
+                                    # Which agent each exchange actually sees; Nobitex
+                                    # rejects anonymous library defaults.
+                                    'agents': {name: gateway.agent_for(name)
+                                               for name in ADAPTERS}
+                                    if hasattr(gateway, 'agent_for') else {},
                                     'max_timestamp_age_seconds': settings.max_timestamp_age_seconds,
                                     'clock_skew_warning_seconds': settings.clock_skew_warning_seconds,
                                     'markets': {name: (len(hub.bitunix) if name == 'bitunix'
@@ -752,7 +841,8 @@ def api_connection(value: ConnectionSettings):
         raise HTTPException(422, 'تنظیمات اتصال نامعتبر است: ' + str(exc.errors()[0].get('msg')))
     settings = candidate
     store.save_settings(settings.model_dump())
-    gateway.configure(user_agent=settings.user_agent, proxy=settings.proxy_url)
+    gateway.configure(user_agent=settings.user_agent, proxy=settings.proxy_url,
+                      exchange_agents={'nobitex': settings.nobitex_user_agent})
     hub.invalidate()
     return {'proxy_url': mask_proxy(settings.proxy_url), 'user_agent': settings.user_agent,
             'max_timestamp_age_seconds': settings.max_timestamp_age_seconds,
@@ -934,6 +1024,679 @@ def api_journal_delete(entry_id: int):
 def api_journal_csv():
     return Response(journal_csv(store.journal()), media_type='text/csv; charset=utf-8',
                     headers={'Content-Disposition': 'attachment; filename=trade-journal.csv'})
+
+
+# ------------------------------------------------------- home, decision and receipt
+STATUS_FA = {
+    'ok': '',
+    'stale': 'قیمت‌های این مسیر کهنه شده‌اند؛ تا به‌روزرسانی بعدی صبر کنید.',
+    'depth needed': 'عمق دفتر سفارش این مسیر هنوز کامل دریافت نشده است.',
+    'error': 'قیمت یکی از بازارهای این مسیر در دسترس نیست.',
+}
+TRADING_STAGES = {'buy_coin': 'کارمزد خرید', 'sell_coin': 'کارمزد فروش',
+                  'convert': 'کارمزد تبدیل'}
+WITHDRAW_STAGES = {'withdraw_coin': 'کارمزد برداشت ارز', 'withdraw_usdt': 'کارمزد برداشت تتر'}
+
+
+def exchange_label(name):
+    return EXCHANGE_LABELS.get(name, name or '—')
+
+
+def margin_for(row, cfg):
+    margins = cfg.get('coin_margins') or {}
+    coin = row.get('coin')
+    if coin in margins and margins[coin] is not None:
+        return float(margins[coin])
+    return float(cfg.get('safety_margin', .3) or 0)
+
+
+def lifetime_minutes(row):
+    """Typical (median) lifetime of recorded profitable moments for this coin, in minutes."""
+    try:
+        history = tracker.rows(row.get('coin'), row.get('trading_mode') or 'transfer')
+    except Exception:                      # noqa: BLE001 - history is a nice-to-have
+        return None
+    durations = sorted(float(item['duration']) for item in history
+                       if item.get('duration') and not item.get('unknown_gaps'))
+    if len(durations) < 3:
+        return None
+    return durations[len(durations) // 2] / 60.0
+
+
+def reference_rate(cfg):
+    """One number for the USDT/toman rate (mid of bid and ask), or None."""
+    rate = hub.conversion_rate(cfg) or {}
+    values = [float(value) for value in (rate.get('bid'), rate.get('ask')) if value]
+    return (sum(values) / len(values)) if values else None
+
+
+def route_stages(row):
+    """The stages this route actually performs, independent of whether it can be priced.
+
+    Used for the fee checklist: a required fee is still required when a *different* fee is
+    missing and the engine refuses to build the chain.
+    """
+    kind = row.get('route')
+    transfer = (row.get('trading_mode') or 'transfer') != 'prefunded'
+    if kind == 'A':
+        stages = ['buy_coin'] + (['withdraw_coin'] if transfer else []) + ['sell_coin', 'convert']
+        return stages + (['withdraw_usdt'] if transfer else [])
+    if kind == 'B':
+        stages = (['withdraw_usdt'] if transfer else []) + ['convert', 'buy_coin']
+        return stages + (['withdraw_coin'] if transfer else []) + ['sell_coin']
+    stages = ['buy_coin'] + (['withdraw_coin'] if transfer else []) + ['sell_coin']
+    return stages
+
+
+def stage_exchange(row, stage):
+    venue = venue_for(row.get('route'), stage)
+    return row.get('iran') if venue == 'iran' else (venue or row.get('iran'))
+
+
+def trading_quote(row, exchange):
+    return 'toman' if row.get('quote') == 'toman' else 'USDT'
+
+
+def fee_entry(fee_row, name, kind):
+    """One fee a route needs, with the confidence metadata the UI shows."""
+    if fee_row is None:
+        return {'name': name, 'kind': kind, 'confidence': 'unknown', 'label': 'نامعلوم',
+                'status': 'نامعلوم', 'source': '', 'fetched_at': None, 'age_days': None,
+                'stale': False, 'needs_review': True, 'note': '', 'known': False}
+    return {'name': name, 'kind': kind, 'known': True, **fee_row.get('meta', {})}
+
+
+def find_fee(fees_rows, exchange, coin, network=None):
+    if not exchange or not coin:
+        return None
+    coin = str(coin).upper()
+    network = (network or '').upper()
+    fallback = None
+    for row in fees_rows or []:
+        if row.get('exchange') != exchange or str(row.get('coin', '')).upper() != coin:
+            continue
+        if network and str(row.get('network', '')).upper() == network:
+            return row
+        if not network:
+            fallback = fallback or row
+    return fallback
+
+
+def route_fee_entries(row, fees_rows=None, now=None):
+    """Every fee the net number of this row actually uses, with its confidence."""
+    fees_rows = fees_rows if fees_rows is not None else []
+    now = time.time() if now is None else now
+    priced = [step.get('name') for step in
+              (((row.get('detail') or {}).get('taker') or {}).get('steps') or [])]
+    entries = []
+    for stage in (priced or route_stages(row)):
+        if stage in TRADING_STAGES:
+            exchange = stage_exchange(row, stage)
+            quote = trading_quote(row, exchange)
+            entries.append({**fee_confidence.trading_fee_tag(
+                settings, exchange, quote,
+                TRADING_STAGES[stage] + ' ' + exchange_label(exchange),
+                now=now, stale_days=settings.fee_stale_days), 'stage': stage, 'kind': 'trading'})
+        elif stage in WITHDRAW_STAGES:
+            exchange = stage_exchange(row, stage)
+            usdt = stage == 'withdraw_usdt'
+            coin = 'USDT' if usdt else row.get('coin')
+            network = row.get('network_usdt') if usdt else (
+                row.get('network_coin') or (row.get('networks') or [None])[0])
+            name = WITHDRAW_STAGES[stage] + ' ' + exchange_label(exchange)
+            entries.append({**fee_entry(find_fee(fees_rows, exchange, coin, network), name,
+                                        'withdrawal'),
+                            'stage': stage, 'kind': 'withdrawal'})
+    return entries
+
+
+def other_costs_pct(cfg, row):
+    other = float(cfg.get('other_costs_toman') or 0)
+    effective = row.get('effective_rate')
+    rate = effective if isinstance(effective, (int, float)) else None
+    rate = rate or reference_rate(cfg)
+    capital = float(row.get('capital') or 0)
+    if not other or not rate or capital <= 0:
+        return 0.0, 0.0
+    return other, other / (capital * float(rate)) * 100.0
+
+
+def decision_context(row, fees_rows, cfg, now=None):
+    taker = (row.get('detail') or {}).get('taker') or {}
+    entries = route_fee_entries(row, fees_rows, now)
+    other_toman, other_pct = other_costs_pct(cfg, row)
+    return {
+        'status': row.get('status'),
+        'status_text': STATUS_FA.get(row.get('status'), ''),
+        'net_pct': row.get('net_pct'),
+        'gross_pct': row.get('gross_pct'),
+        'margin': margin_for(row, cfg),
+        'depth_ok': bool((row.get('flags') or {}).get('depth')),
+        'capital_ok': None,
+        'fees': entries,
+        'transfer_minutes': (row.get('transfer_time') or {}).get('minutes'),
+        'lifetime_minutes': lifetime_minutes(row),
+        'data_age': row.get('age'),
+        'stale_seconds': float(cfg.get('stale_seconds', 120)),
+        'other_costs_pct': other_pct,
+        'error': taker.get('error') or row.get('error'),
+    }
+
+
+def annotated_fees(now=None):
+    return fee_confidence.annotate(store.fees() or [], now or time.time(),
+                                   settings.fee_stale_days)
+
+
+def stage_prices_for(key):
+    route = hub.route_by_key(key)
+    if route is None:
+        return {}
+    try:
+        return hub.stage_prices(route)
+    except (ValueError, KeyError, TypeError):
+        return {}
+
+
+def build_receipt(row, fees_rows, cfg, now=None):
+    other = float(cfg.get('other_costs_toman') or 0)
+    return receipt_builder.build(
+        row, prices=stage_prices_for(row.get('key')),
+        fee_tags={entry['stage']: entry for entry in route_fee_entries(row, fees_rows, now)},
+        other_costs_toman=other, stale_days=settings.fee_stale_days,
+        conversion_rate=row.get('effective_rate'), now=now)
+
+
+def candidate_rows(rows, setup_state):
+    """Rows the user can actually act on, best net first."""
+    filtered = setup_model.filter_rows(rows, setup_state)
+    usable = [row for row in filtered['rows']
+              if not str(row.get('key') or '').startswith('classic:')]
+    def key(row):
+        value = row.get('net_pct')
+        if value is None:
+            value = (row.get('gross_pct') if row.get('gross_pct') is not None else -1e9) - 1e6
+        return float(value)
+    usable.sort(key=key, reverse=True)
+    return usable, filtered['excluded']
+
+
+def fee_needs(rows, fees_rows, cfg, now=None):
+    """Which fees the best few routes still need — the lazy fee loading list."""
+    limit = int(cfg.get('fee_candidate_limit', 10) or 10)
+    top = sorted([row for row in rows if row.get('gross_pct') is not None],
+                 key=lambda row: float(row['gross_pct']), reverse=True)[:limit]
+    coins, missing, stale, estimated, routes = [], [], [], [], []
+    for row in top:
+        for entry in route_fee_entries(row, fees_rows, now):
+            coin = row.get('coin')
+            if entry['confidence'] == 'unknown':
+                if coin not in missing:
+                    missing.append(coin)
+                if row.get('key') not in routes:
+                    routes.append(row.get('key'))
+            elif entry.get('stale'):
+                if coin not in stale:
+                    stale.append(coin)
+            elif entry['confidence'] == 'estimated':
+                if coin not in estimated:
+                    estimated.append(coin)
+        if row.get('coin') not in coins:
+            coins.append(row.get('coin'))
+    result = {'coins': coins[:limit], 'count': len(coins[:limit]),
+              'missing_coins': missing, 'stale_coins': stale,
+              'estimated_coins': estimated, 'routes': routes[:limit],
+              'limit': limit}
+    if missing:
+        result['text'] = ('برای این ' + str(len(missing)) + ' ارز کارمزد برداشت لازم است.')
+        result['action'] = 'کارمزدها را وارد کنید'
+    elif stale:
+        result['text'] = ('کارمزد ' + str(len(stale)) + ' ارز قدیمی شده؛ یک بار بررسی کنید.')
+        result['action'] = 'بررسی دوباره کارمزدها'
+    elif estimated:
+        result['text'] = ('کارمزد ' + str(len(estimated)) + ' ارز تخمینی است؛ برای عدد قطعی تأییدش کنید.')
+        result['action'] = 'تأیید کارمزدها'
+    else:
+        result['text'] = ''
+        result['action'] = ''
+    return result
+
+
+def _net_after(card):
+    numbers = card.get('numbers') or {}
+    value = numbers.get('net_after_other')
+    if value is None:
+        value = numbers.get('net_pct')
+    return float(value) if value is not None else -1e9
+
+
+def home_card(row, fees_rows, cfg, now):
+    context = decision_context(row, fees_rows, cfg, now)
+    result = decision_engine.decide(context)
+    confidence = fee_confidence.route_confidence(context['fees'])
+    receipt = build_receipt(row, fees_rows, cfg, now)
+    totals = receipt.get('totals') or {}
+    numbers = {'net_pct': totals.get('profit_pct'),
+               'net_after_other': totals.get('pct_after_other'),
+               'profit_usdt': totals.get('profit'),
+               'profit_toman': totals.get('profit_toman'),
+               'final_usdt': totals.get('final'),
+               'gross_pct': totals.get('gross_pct'),
+               'costs_pct': totals.get('costs_pct'),
+               'transfer_minutes': totals.get('transfer_minutes'),
+               'minimum_capital': totals.get('minimum_capital'),
+               'breakeven_capital': totals.get('breakeven_capital')}
+    # A route that cannot be priced yet still shows its raw spread so the user can see why
+    # the fee question matters; the net number stays empty.
+    if numbers['gross_pct'] is None:
+        numbers['gross_pct'] = row.get('gross_pct')
+    if numbers['net_pct'] is None:
+        numbers['net_pct'] = row.get('net_pct')
+    if numbers['net_after_other'] is None and row.get('net_pct') is not None:
+        numbers['net_after_other'] = row.get('net_pct') - context['other_costs_pct']
+    if numbers['transfer_minutes'] is None:
+        numbers['transfer_minutes'] = (row.get('transfer_time') or {}).get('minutes')
+    return {'key': row.get('key'), 'coin': row.get('coin'), 'quote': row.get('quote'),
+            'route': row.get('route'), 'route_label': row.get('route_label'),
+            'venue_pair': row.get('venue_pair'),
+            'venues': [exchange_label(name) for name in (row.get('venue_pair') or [])],
+            'title': f"{row.get('coin')} — "
+                     f"{exchange_label((row.get('venue_pair') or [None])[0])} ← "
+                     f"{exchange_label((row.get('venue_pair') or [None, None])[1])}",
+            'row': public_row(row), 'decision': result,
+            'summary_text': decision_engine.summary_text(result, row.get('coin'),
+                                                         row.get('venue_pair')),
+            'confidence': confidence,
+            'receipt': receipt,
+            'numbers': numbers}
+
+
+def gauge_payload(cfg, current=None):
+    days = int(cfg.get('gauge_days', 7) or 7)
+    rows = store.best_history(days * 86400)
+    data = gauge.from_history(rows, current=current, window_hours=days * 24)
+    data['days'] = days
+    return data
+
+
+def empty_state(cfg, rows):
+    """A friendly, honest answer for the days nothing is profitable."""
+    days = int(cfg.get('gauge_days', 7) or 7)
+    cutoff = time.time() - days * 86400
+    margin = float(cfg.get('safety_margin', .3) or 0)
+    last = None
+    for sample in reversed(store.best_history(days * 86400)):
+        if sample.get('net_pct') is not None and float(sample['net_pct']) > margin:
+            last = sample['timestamp']
+            break
+    nets = [float(row['net_pct']) for row in rows if row.get('net_pct') is not None]
+    return {'message': 'فعلاً فرصت سودده‌ای نیست. همان‌طور که بازار حرکت کند، بهترین '
+                       'فرصت‌ها همین‌جا نشان داده می‌شوند.',
+            'last_profitable_at': last,
+            'window_days': days, 'since': cutoff,
+            'best_now': max(nets) if nets else None,
+            'notify': bool((cfg.get('setup') or {}).get('notify'))}
+
+
+@app.get('/api/home')
+def api_home():
+    now = time.time()
+    cfg = hub.config()
+    fees_rows = annotated_fees(now)
+    setup_state = setup_model.normalize(cfg.get('setup') or {})
+    rows = hub.rows(settings, cfg)
+    candidates, excluded = candidate_rows(rows, setup_state)
+    cards = [home_card(row, fees_rows, cfg, now) for row in candidates[:6]]
+    # Only a route whose spread could actually be read can be the headline; when nothing is
+    # priced (books missing, market closed) the page shows the friendly empty state instead.
+    priced = [card for card in cards
+              if card['numbers'].get('gross_pct') is not None
+              or card['numbers'].get('net_pct') is not None]
+    best = priced[0] if priced else None
+    positive = [card for card in cards if _net_after(card) > 0]
+    state = ui_payload()
+    rate = hub.conversion_rate(cfg)
+    mid = reference_rate(cfg)
+    capital_usdt = float(cfg.get('capital_usdt') or 0)
+    return {
+        'now': now,
+        'paused': bool(cfg.get('paused')),
+        'interval': cfg.get('interval'),
+        'age': None if not hub.last_scan else round(now - hub.last_scan, 1),
+        'next_refresh': hub.summary(rows, cfg).get('next_refresh'),
+        'error': hub.last_error,
+        'setup': setup_model.summary(setup_state),
+        'wizard_done': bool(state.get('wizard_done')),
+        'capital': {'usdt': capital_usdt,
+                    'toman': capital_usdt * mid if mid else None,
+                    'rate': mid, 'rate_source': rate},
+        'best': best,
+        'count': len(cards),
+        'positive_count': len(positive),
+        'others': [{'key': card['key'], 'coin': card['coin'],
+                    'route_label': card['route_label'], 'venues': card['venues'],
+                    'verdict': card['decision']['verdict'],
+                    'label': card['decision']['label'],
+                    'icon': card['decision']['icon'],
+                    'tone': card['decision']['tone'],
+                    'net_pct': card['numbers'].get('net_pct'),
+                    'net_after_other': card['numbers'].get('net_after_other')}
+                   for card in cards[1:6]],
+        'empty': None if best and _net_after(best) > 0 else empty_state(cfg, rows),
+        'fees': fee_needs(candidates, fees_rows, cfg, now),
+        'gauge': gauge_payload(cfg, current=(best or {}).get('numbers', {}).get(
+            'net_after_other')),
+        'excluded': excluded[:20],
+        'rows_count': len(candidates),
+        'banner': banner_payload(state, candidates, fees_rows, cfg, now),
+        'disclaimer': receipt_builder.DISCLAIMER,
+        'fee_pages': settings.fee_pages,
+    }
+
+
+@app.get('/api/decide')
+def api_decide(key: str):
+    now = time.time()
+    cfg = hub.config()
+    row = next((item for item in hub.rows(settings, cfg) if item.get('key') == key), None)
+    if row is None:
+        raise HTTPException(404, 'این مسیر پیدا نشد؛ بازارها را به‌روزرسانی کنید.')
+    fees_rows = annotated_fees(now)
+    result = decision_engine.decide(decision_context(row, fees_rows, cfg, now))
+    return {'key': key, 'decision': result,
+            'summary_text': decision_engine.summary_text(result, row.get('coin'),
+                                                         row.get('venue_pair')),
+            'confidence': fee_confidence.route_confidence(
+                route_fee_entries(row, fees_rows, now))}
+
+
+@app.get('/api/receipt')
+def api_receipt(key: str):
+    now = time.time()
+    cfg = hub.config()
+    row = next((item for item in hub.rows(settings, cfg) if item.get('key') == key), None)
+    if row is None:
+        raise HTTPException(404, 'این مسیر پیدا نشد؛ بازارها را به‌روزرسانی کنید.')
+    fees_rows = annotated_fees(now)
+    receipt = build_receipt(row, fees_rows, cfg, now)
+    return {'key': key, 'receipt': receipt, 'text': receipt_builder.to_text(receipt),
+            'plan': build_plan(row, network=row.get('network_coin')),
+            'decision': decision_engine.decide(decision_context(row, fees_rows, cfg, now)),
+            'fees': route_fee_entries(row, fees_rows, now)}
+
+
+@app.get('/api/receipt.csv')
+def api_receipt_csv(key: str):
+    now = time.time()
+    cfg = hub.config()
+    row = next((item for item in hub.rows(settings, cfg) if item.get('key') == key), None)
+    if row is None:
+        raise HTTPException(404, 'این مسیر پیدا نشد؛ بازارها را به‌روزرسانی کنید.')
+    receipt = build_receipt(row, annotated_fees(now), cfg, now)
+    return Response(receipt_builder.to_csv(receipt.get('steps')),
+                    media_type='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': 'attachment; filename=receipt.csv'})
+
+
+@app.get('/api/gauge')
+def api_gauge():
+    cfg = hub.config()
+    return gauge_payload(cfg)
+
+
+# ------------------------------------------------------------------- setup / wizard
+def banner_payload(state, candidates, fees_rows, cfg, now):
+    """What is still needed — a small, dismissible list, never a modal."""
+    items = []
+    setup_state = setup_model.normalize(cfg.get('setup') or {})
+    if not setup_state.get('exchanges'):
+        items.append({'id': 'exchanges', 'text': 'صرافی‌هایی که در آن‌ها حساب دارید را انتخاب کنید.',
+                      'page': 'setup'})
+    needs = fee_needs(candidates, fees_rows, cfg, now)
+    if needs.get('missing_coins'):
+        items.append({'id': 'fees', 'text': needs['text'], 'page': 'fees',
+                      'coins': needs['missing_coins']})
+    if not cfg.get('capital_usdt'):
+        items.append({'id': 'capital', 'text': 'سرمایه‌ای که می‌خواهید جابه‌جا کنید را وارد کنید.',
+                      'page': 'setup'})
+    if not state.get('wizard_done'):
+        items.append({'id': 'wizard', 'text': 'راه‌اندازی سه‌مرحله‌ای را کامل کنید.',
+                      'page': 'setup'})
+    signature = '|'.join(item['id'] for item in items)
+    return {'items': items, 'signature': signature,
+            'dismissed': str(state.get('setup_banner_dismissed') or '') == signature,
+            'visible': bool(items) and str(state.get('setup_banner_dismissed') or '') != signature}
+
+
+class SetupRequest(BaseModel):
+    exchanges: list[Literal['wallex', 'nobitex', 'bitunix']] = Field(default_factory=list,
+                                                                     max_length=3)
+    money: Literal['toman_iran', 'usdt', 'coins_both'] = 'toman_iran'
+    capital: Optional[float] = Field(default=None, gt=0, le=1e12, allow_inf_nan=False)
+    capital_unit: Literal['toman', 'USDT'] = 'toman'
+    notify: bool = False
+    interval: Optional[int] = Field(default=None, ge=5, le=3600)
+    accept_default_fees: bool = True
+    complete: bool = False
+
+
+@app.get('/api/setup')
+def api_setup():
+    cfg = hub.config()
+    setup_state = setup_model.normalize(cfg.get('setup') or {})
+    state = ui_payload()
+    fees_rows = annotated_fees()
+    rows = hub.rows(settings, cfg)
+    candidates, _ = candidate_rows(rows, setup_state)
+    return {'setup': setup_model.summary(setup_state), 'wizard_done': bool(state.get('wizard_done')),
+            'exchanges': [{'value': name, 'label': exchange_label(name)}
+                          for name in setup_model.EXCHANGES],
+            'money_options': [{'value': key, 'label': value}
+                              for key, value in setup_model.MONEY.items()],
+            'fees': fee_needs(candidates, fees_rows, cfg),
+            'capital': {'usdt': cfg.get('capital_usdt'), 'toman': cfg.get('capital_toman'),
+                        'interval': cfg.get('interval')},
+            'fee_pages': settings.fee_pages}
+
+
+@app.put('/api/setup')
+def save_setup(value: SetupRequest):
+    cfg = hub.config()
+    exchanges = [name for name in value.exchanges if name in setup_model.EXCHANGES] or \
+        list(setup_model.DEFAULT['exchanges'])
+    rate = reference_rate(cfg) or 0
+    capital_usdt = float(cfg.get('capital_usdt') or 100)
+    capital_toman = float(cfg.get('capital_toman') or 10_000_000)
+    if value.capital is not None:
+        if value.capital_unit == 'toman':
+            capital_toman = float(value.capital)
+            if rate:
+                capital_usdt = capital_toman / float(rate)
+        else:
+            capital_usdt = float(value.capital)
+            if rate:
+                capital_toman = capital_usdt * float(rate)
+    setup_state = setup_model.normalize({'exchanges': exchanges, 'money': value.money,
+                                         'capital_toman': capital_toman,
+                                         'capital_usdt': capital_usdt,
+                                         'notify': value.notify})
+    cfg['setup'] = setup_state
+    cfg['capital_usdt'] = round(capital_usdt, 6)
+    cfg['capital_toman'] = round(capital_toman, 2)
+    cfg['trading_mode'] = setup_model.trading_mode(setup_state)
+    if value.interval:
+        cfg['interval'] = int(value.interval)
+    store.save_scanner_settings(cfg)
+    state = {'wizard_done': bool(value.complete) or bool(ui_payload().get('wizard_done'))}
+    store.save_ui_state(state)
+    hub.invalidate()
+    return {'setup': setup_model.summary(setup_state), 'fees': fee_needs(
+        candidate_rows(hub.rows(settings, cfg), setup_state)[0], annotated_fees(), cfg),
+        'wizard_done': bool(state['wizard_done'])}
+
+
+# ------------------------------------------------------------------------- fees
+class FeesParseRequest(BaseModel):
+    text: str = Field(max_length=200000)
+    exchange: Literal['wallex', 'nobitex', 'bitunix'] = 'nobitex'
+    kind: Literal['auto', 'csv', 'page'] = 'auto'
+
+
+class FeeRowIn(BaseModel):
+    exchange: Literal['wallex', 'nobitex', 'bitunix']
+    coin: str = Field(min_length=1, max_length=20)
+    network: str = Field(min_length=1, max_length=40)
+    withdrawal: Optional[float] = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
+    minimum: Optional[float] = Field(default=None, ge=0, le=1e12, allow_inf_nan=False)
+    supported: bool = True
+    note: str = Field(default='', max_length=200)
+
+
+class FeesSaveRequest(BaseModel):
+    rows: list[FeeRowIn] = Field(default_factory=list, max_length=500)
+    fetch_now: bool = False
+
+
+def normalise_fee_row(value):
+    try:
+        coin = normalize(value.coin)
+    except ValueError:
+        raise HTTPException(400, 'نماد ارز «' + value.coin + '» شناخته نشد.')
+    network = re.sub(r'[^A-Za-z0-9_-]', '', value.network).upper()
+    if not network:
+        raise HTTPException(400, 'نام شبکه خالی است.')
+    return {'exchange': value.exchange, 'coin': coin, 'network': network,
+            'withdrawal': value.withdrawal, 'minimum': value.minimum,
+            'supported': bool(value.supported),
+            'confidence': 'manual' if value.withdrawal is not None else 'unknown',
+            'source': 'assistant', 'fetched_at': time.time(),
+            'note': value.note[:200]}
+
+
+@app.get('/api/fees')
+def api_fees():
+    now = time.time()
+    rows = annotated_fees(now)
+    counts = {level: 0 for level in fee_confidence.CONFIDENCE}
+    stale = 0
+    for row in rows:
+        counts[row['meta']['confidence']] = counts.get(row['meta']['confidence'], 0) + 1
+        stale += 1 if row['meta']['stale'] else 0
+    cfg = hub.config()
+    setup_state = setup_model.normalize(cfg.get('setup') or {})
+    candidates, _ = candidate_rows(hub.rows(settings, cfg), setup_state)
+    trading = []
+    for exchange, quote, market in (('wallex', 'toman', 'تومان'), ('nobitex', 'toman', 'تومان'),
+                                    ('wallex', 'USDT', 'USDT'), ('nobitex', 'USDT', 'USDT'),
+                                    ('bitunix', 'USDT', 'USDT')):
+        tag = fee_confidence.trading_fee_tag(
+            settings, exchange, quote,
+            exchange_label(exchange) + ' / ' + market, now=now,
+            stale_days=settings.fee_stale_days)
+        values = tag.get('values') or {}
+        trading.append({'exchange': exchange_label(exchange), 'market': market,
+                        'maker': values.get('maker'), 'taker': values.get('taker'),
+                        'confidence': tag['confidence'], 'label': tag['label'],
+                        'source': tag['source']})
+    return {'rows': rows, 'counts': counts, 'stale': stale,
+            'stale_days': settings.fee_stale_days,
+            'sources': fee_sources.SOURCES, 'pages': settings.fee_pages,
+            'trading': trading,
+            'needs': fee_needs(candidates, rows, cfg, now),
+            'last_auto': ui_payload().get('fees_auto_at') or 0}
+
+
+@app.post('/api/fees/parse')
+def api_fees_parse(value: FeesParseRequest):
+    result = fee_text.parse_any(value.text, value.exchange,
+                               'csv' if value.kind == 'csv' else 'auto')
+    for row in result['rows']:
+        row['fetched_at'] = time.time()
+        row['source'] = 'assistant'
+    return result
+
+
+@app.post('/api/fees/save')
+def api_fees_save(value: FeesSaveRequest):
+    if not value.rows:
+        raise HTTPException(400, 'هیچ ردیفی برای ذخیره نبود.')
+    rows = []
+    seen = set()
+    for item in value.rows:
+        row = normalise_fee_row(item)
+        key = (row['exchange'], row['coin'], row['network'])
+        if key in seen:
+            raise HTTPException(400, 'ردیف تکراری: ' + row['coin'] + ' ' + row['network'])
+        seen.add(key)
+        rows.append(row)
+    store.upsert_fees(rows)
+    hub.invalidate()
+    return {'saved': len(rows), 'rows': annotated_fees()}
+
+
+def merge_auto_fees(incoming):
+    """Automatic rows never overwrite a newer hand-entered fee."""
+    existing = {(row['exchange'], row['coin'], row['network']): row for row in store.fees()}
+    keep, skipped = [], 0
+    for row in incoming:
+        key = (row['exchange'], row['coin'], row['network'])
+        before = existing.get(key)
+        if before is not None and fee_confidence.normalize(before.get('confidence')) == 'manual':
+            old = before.get('fetched_at')
+            new = row.get('fetched_at')
+            if old is not None and (new is None or float(old) >= float(new)):
+                skipped += 1
+                continue
+        keep.append(row)
+    return keep, skipped
+
+
+async def refresh_automatic_fees(force=False):
+    """Once a day, ask each documented public endpoint for its fee list."""
+    state = ui_payload()
+    last = float(state.get('fees_auto_at') or 0)
+    if not force and time.time() - last < 86400:
+        return {'skipped': True, 'last': last}
+    results = []
+    saved = 0
+    for exchange in ('nobitex', 'wallex', 'bitunix'):
+        try:
+            result = await fee_sources.fetch_fees(gateway, exchange, describe)
+        except Exception as exc:                    # noqa: BLE001 - never break the scan
+            result = {'exchange': exchange, 'ok': False, 'rows': [], 'attempted': True,
+                      'reason': 'unknown', 'detail': str(exc)[:200],
+                      'message': 'خواندن خودکار کارمزد ناموفق بود.'}
+        summary = {key: result.get(key) for key in
+                   ('exchange', 'ok', 'attempted', 'reason', 'message', 'status', 'url')}
+        summary['count'] = len(result.get('rows') or [])
+        if result.get('rows'):
+            keep, skipped = merge_auto_fees(result['rows'])
+            if keep:
+                store.upsert_fees(keep)
+                saved += len(keep)
+            summary['skipped_manual'] = skipped
+        results.append(summary)
+    if any(item.get('ok') for item in results):
+        store.save_ui_state({'fees_auto_at': time.time()})
+        hub.invalidate()
+    return {'skipped': False, 'results': results, 'saved': saved,
+            'at': time.time()}
+
+
+@app.post('/api/fees/refresh')
+async def api_fees_refresh():
+    return await refresh_automatic_fees(force=True)
+
+
+@app.get('/api/fees/needed')
+def api_fees_needed():
+    now = time.time()
+    cfg = hub.config()
+    fees_rows = annotated_fees(now)
+    setup_state = setup_model.normalize(cfg.get('setup') or {})
+    candidates, _ = candidate_rows(hub.rows(settings, cfg), setup_state)
+    return fee_needs(candidates, fees_rows, cfg, now)
+
 
 
 # ------------------------------------------------------------------------ wizard

@@ -66,6 +66,20 @@ class Storage:
             db.execute('CREATE TABLE IF NOT EXISTS scan_history (timestamp REAL, coin TEXT, quote TEXT, wallex_bid REAL, wallex_ask REAL, nobitex_bid REAL, nobitex_ask REAL, spread_a REAL, spread_b REAL)')
             db.execute('CREATE INDEX IF NOT EXISTS scan_history_lookup ON scan_history(coin,quote,timestamp)')
             db.execute('CREATE TABLE IF NOT EXISTS scanner_settings (id INTEGER PRIMARY KEY, value TEXT)')
+            db.execute('CREATE TABLE IF NOT EXISTS best_history (timestamp REAL, key TEXT, net_pct REAL, coin TEXT, route TEXT)')
+            db.execute('CREATE INDEX IF NOT EXISTS best_history_lookup ON best_history(timestamp)')
+        self.migrate_fee_columns()
+
+    FEE_EXTRA_COLUMNS = (('confidence', "TEXT DEFAULT 'manual'"), ('source', 'TEXT'),
+                         ('fetched_at', 'REAL'), ('note', 'TEXT'))
+
+    def migrate_fee_columns(self):
+        """Add the confidence columns to databases created before this feature existed."""
+        with self.connect() as db:
+            existing = {row[1] for row in db.execute('PRAGMA table_info(network_fees)')}
+            for name, kind in self.FEE_EXTRA_COLUMNS:
+                if name not in existing:
+                    db.execute(f'ALTER TABLE network_fees ADD COLUMN {name} {kind}')
 
     def scanner_settings(self):
         with self.connect() as db:
@@ -81,10 +95,47 @@ class Storage:
             db.row_factory = sqlite3.Row
             return [dict(r) for r in db.execute('SELECT * FROM network_fees ORDER BY coin,network,exchange')]
 
+    @staticmethod
+    def _fee_tuple(row):
+        return (row['exchange'], row['coin'], row['network'], row.get('withdrawal'),
+                row.get('minimum'), int(bool(row.get('supported'))),
+                row.get('confidence') or ('manual' if row.get('withdrawal') is not None
+                                         else 'unknown'),
+                row.get('source'), row.get('fetched_at'),
+                row.get('note'))
+
     def replace_fees(self, rows):
         with self.connect() as db:
             db.execute('DELETE FROM network_fees')
-            db.executemany('INSERT INTO network_fees VALUES (?,?,?,?,?,?)', [(r['exchange'],r['coin'],r['network'],r['withdrawal'],r['minimum'],int(r['supported'])) for r in rows])
+            db.executemany('INSERT INTO network_fees VALUES (?,?,?,?,?,?,?,?,?,?)',
+                           [self._fee_tuple(r) for r in rows])
+
+    def upsert_fees(self, rows):
+        """Insert or update only the given rows; everything else is left untouched."""
+        with self.connect() as db:
+            db.executemany(
+                'INSERT OR REPLACE INTO network_fees VALUES (?,?,?,?,?,?,?,?,?,?)',
+                [self._fee_tuple(r) for r in rows])
+
+    def record_best(self, timestamp, rows):
+        """Remember the best net % of a scan, for the market-position gauge."""
+        payload = [(timestamp, row.get('key'), row.get('net_pct'), row.get('coin'), row.get('route'))
+                   for row in rows if row.get('net_pct') is not None]
+        if not payload:
+            return
+        with self.connect() as db:
+            db.executemany('INSERT INTO best_history VALUES (?,?,?,?,?)', payload)
+            # Keep the gauge's history bounded (30 days is far more than it compares).
+            if int(timestamp) % 3600 < 60:
+                db.execute('DELETE FROM best_history WHERE timestamp < ?',
+                           (float(timestamp) - 30 * 86400,))
+
+    def best_history(self, seconds):
+        cutoff = __import__('time').time() - float(seconds)
+        with self.connect() as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute(
+                'SELECT * FROM best_history WHERE timestamp >= ? ORDER BY timestamp', (cutoff,))]
 
     def scan_record(self, rows, retention_days):
         with self.connect() as db:

@@ -17,6 +17,10 @@ import httpx
 
 PREVIEW_CHARS = 500
 
+# Documented polite-robot style: `TraderBot/<name>-<version>`. Nobitex asks for this shape
+# and its CDN may reject library defaults such as `python-httpx/x.y`.
+DEFAULT_AGENT = 'TraderBot/usdt-monitor-3.0 (+read-only; local desktop monitor)'
+
 # Stable reason codes shared by the adapters, the diagnostics page and the tests.
 REASONS = (
     'ok', 'http_429', 'http_4xx', 'http_5xx', 'timeout', 'network', 'not_json',
@@ -304,25 +308,47 @@ class Gateway:
 
     def __init__(self, monitor: Optional[Monitor] = None, user_agent: Optional[str] = None,
                  proxy: Optional[str] = None, timeout: float = 8.0,
-                 max_attempts: int = 3, max_wait: float = 6.0):
+                 max_attempts: int = 3, max_wait: float = 6.0,
+                 exchange_agents: Optional[dict] = None):
         self.monitor = monitor or Monitor()
-        self.user_agent = user_agent or 'TraderBot/USDTMonitor-2.0 (+read-only)'
+        self.user_agent = user_agent or DEFAULT_AGENT
         self.proxy = proxy
         self.timeout = timeout
         self.max_attempts = max_attempts
         self.max_wait = max_wait
+        # Per-exchange overrides. Nobitex documents a bot style User-Agent and its CDN
+        # rejects some default HTTP clients, so this is configurable in the settings page.
+        self.exchange_agents = {name: agent for name, agent in (exchange_agents or {}).items()
+                                if agent}
 
     def configure(self, user_agent: Optional[str] = None, proxy: Optional[str] = None,
-                  timeout: Optional[float] = None) -> None:
+                  timeout: Optional[float] = None,
+                  exchange_agents: Optional[dict] = None) -> None:
         if user_agent is not None:
             self.user_agent = user_agent
         self.proxy = proxy
         if timeout is not None:
             self.timeout = timeout
+        if exchange_agents is not None:
+            self.exchange_agents = {name: agent for name, agent in exchange_agents.items()
+                                    if agent}
+
+    def agent_for(self, exchange: Optional[str] = None) -> str:
+        if exchange and self.exchange_agents.get(exchange):
+            return self.exchange_agents[exchange]
+        return self.user_agent
+
+    def headers_for(self, exchange: Optional[str] = None) -> dict:
+        agent = self.agent_for(exchange)
+        headers = {'User-Agent': agent, 'Accept': 'application/json'}
+        if agent.startswith('TraderBot/'):
+            # Polite bots identify themselves and where the project lives.
+            headers['From'] = 'local-read-only-monitor'
+        return headers
 
     @property
     def headers(self) -> dict:
-        return {'User-Agent': self.user_agent, 'Accept': 'application/json'}
+        return self.headers_for(None)
 
     def make_client(self) -> httpx.AsyncClient:
         options = dict(timeout=httpx.Timeout(self.timeout), headers=self.headers,
@@ -350,7 +376,8 @@ class Gateway:
             response = None
             try:
                 async with budget(budget_name or exchange).slot(max_wait=self.max_wait):
-                    response = await client.get(endpoint.url, timeout=self.timeout)
+                    response = await client.get(endpoint.url, timeout=self.timeout,
+                                                headers=self.headers_for(exchange))
             except BudgetExhausted as exc:
                 result.reason, result.detail = 'budget', str(exc)
                 self._record(exchange, endpoint, result, None, 0.0, False, 'budget', 'request budget')

@@ -54,10 +54,14 @@ class Hub:
         return {'interval': 10, 'depth_interval': 5, 'hot_rows': 20, 'stale_seconds': 120,
                 'paused': False, 'capital_usdt': 100, 'capital_toman': 10_000_000,
                 'ticker_batch': 12, 'depth_batch': 6, 'safety_margin': .3, 'coin_margins': {},
-                'row_modes': {}, 'trading_mode': 'transfer', 'transfer_minutes': {},
+                'row_modes': {}, 'trading_mode': 'transfer',
+                # Rough, editable starting points; the UI labels every one as "تقریبی".
+                'transfer_minutes': {'default': 60, 'TRC20': 5, 'BEP20': 5, 'ERC20': 10,
+                                     'BTC': 60, 'TON': 5},
                 'networks': {}, 'rebalancing_trades': 10, 'rebalance_trades': 10,
                 'conversion_source': 'auto', 'close_confirmations': 2, 'retention_days': 30,
-                'balances': {}}
+                'balances': {}, 'setup': {}, 'other_costs_toman': 0, 'other_costs_note': '',
+                'fee_candidate_limit': 10, 'gauge_days': 7}
 
     def postpone(self):
         self.last_scan = 0.0
@@ -491,6 +495,31 @@ class Hub:
         else:
             row['status'] = 'ok'
         return row
+
+    def stage_prices(self, route):
+        """Best ask/bid of the book each receipt stage trades against."""
+        def best(key, side):
+            book = self.books.get(key)
+            if book is None:
+                return None
+            return book.best_ask if side == 'ask' else book.best_bid
+
+        bitunix = ('bitunix', route.coin, 'USDT')
+        iran = (route.iran, route.coin, route.quote)
+        conversion = (route.iran, 'USDT', 'toman')
+        if route.kind == 'A':
+            return {'buy_coin': {'ask': best(bitunix, 'ask')},
+                    'sell_coin': {'bid': best(iran, 'bid')},
+                    'convert': {'ask': best(conversion, 'ask')}}
+        if route.kind == 'B':
+            return {'buy_coin': {'ask': best(iran, 'ask')},
+                    'sell_coin': {'bid': best(bitunix, 'bid')},
+                    'convert': {'bid': best(conversion, 'bid')}}
+        if route.kind == 'direct_iran_to_bitunix':
+            return {'buy_coin': {'ask': best(iran, 'ask')},
+                    'sell_coin': {'bid': best(bitunix, 'bid')}}
+        return {'buy_coin': {'ask': best(bitunix, 'ask')},
+                'sell_coin': {'bid': best(iran, 'bid')}}
 
     def _balance_limit(self, route, cfg, trading_mode):
         if trading_mode != 'prefunded':
