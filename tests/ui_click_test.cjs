@@ -266,14 +266,15 @@ function countCalls(target, name) {
     await env.settle();
     const duringPress = doc.querySelector('#rows tr[data-key="' + key + '"]');
     const heldBack = duringPress === row && duringPress.querySelector('.pct').textContent === before;
-    const blockedAfterLoad = App.blockingInteraction();
+    const blockedAfterLoad = App.blockingInteraction ? App.blockingInteraction() : 'n/a';
     row.dispatchEvent(env.emit('mouseup'));
     await env.settle(400);
     const afterRelease = doc.querySelector('#rows tr[data-key="' + key + '"]');
     const applied = afterRelease === row && /۴۲\.۴۲۴|42\.424/.test(afterRelease.querySelector('.pct').textContent);
     record('کلیک نگه‌داشته‌شده رندر را عقب می‌اندازد و بعد از رها شدن اعمال می‌شود',
       heldBack && applied, 'heldBack=' + heldBack + ' appliedAfterRelease=' + applied
-        + ' blockedBy=' + blockedAfterLoad + ' stillPending=' + App.hasPendingRender()
+        + ' blockedBy=' + blockedAfterLoad + ' stillPending='
+        + (App.hasPendingRender ? App.hasPendingRender() : 'n/a')
         + ' text=' + JSON.stringify((doc.querySelector('#rows tr[data-key="' + key + '"] .pct') || {}).textContent || ''));
   }
 
