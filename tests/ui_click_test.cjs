@@ -293,6 +293,30 @@ function countCalls(target, name) {
     record('اشاره‌گر روی جدول، گره ردیف را جایگزین نمی‌کند', same, 'sameNode=' + same);
   }
 
+  {
+    // While the pointer holds the order still, the rank column must agree with what is
+    // actually on screen (1, 2, 3 … top to bottom), never claim a hidden order.
+    await closeLayers();
+    await vm.runInContext("App.switchTab('opportunities')", env.ctx);
+    await env.settle();
+    const tbody = $('rows');
+    tbody.dispatchEvent(new w.Event('mouseenter'));
+    const fresh = structuredClone(env.data());
+    fresh.rows = fresh.rows.slice().reverse().map((row, index) => (
+      {...row, net_pct: 30 - index, net_quote: 1000 - index}));
+    env.setData(fresh);
+    await vm.runInContext('App.load(false)', env.ctx);
+    await env.settle();
+    const ranks = Array.from(tbody.children).map(node => node.children[0].textContent);
+    const expected = Array.from({length: tbody.children.length}, (unused, index) =>
+      String(index + 1).replace(/[0-9]/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]));
+    tbody.dispatchEvent(new w.Event('mouseleave'));
+    await env.settle(200);
+    record('شماره رتبه در حین هاور با ترتیب دیده‌شده می‌خواند',
+      JSON.stringify(ranks) === JSON.stringify(expected),
+      'ranks=' + JSON.stringify(ranks) + ' expected=' + JSON.stringify(expected));
+  }
+
   /* --------------------------------------------------------------- D. performance */
 
   {

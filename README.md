@@ -423,15 +423,16 @@ NODE_PATH=/tmp/jsdom-env/node_modules node tests/ui_fees_smoke.cjs
 #### ۱۵.۳ تست‌های این مرحله
 ```sh
 .venv/bin/python -m pytest -q                                   # ۳۱۸ تست سبز (بدون تغییر)
-NODE_PATH=/tmp/jsdom-env/node_modules node tests/ui_click_test.cjs        # ۲۷ بررسی
+NODE_PATH=/tmp/jsdom-env/node_modules node tests/ui_click_test.cjs        # ۲۸ بررسی
 NODE_PATH=/tmp/jsdom-env/node_modules node tests/ui_home_click_test.cjs   # ۱۸ بررسی
 NODE_PATH=/tmp/jsdom-env/node_modules node tests/ui_smoke.cjs             # و بقیه smokeها
 ```
 - `tests/ui_click_test.cjs`: همان قاعده کلیک مرورگر را شبیه‌سازی می‌کند (`mousedown` → یک رندر → آیا
   همان گره هنوز در صفحه است؟) و برای ۱۹ کنترل داشبورد اجرا می‌شود؛ سپس ۲۰ رندر پشت‌سرهم و شمارش
   «یک کلیک = یک اقدام»، نگه‌داشتن فوکوس/هویت گره، عقب‌انداختن رندر در حین فشردن و هاور، بودجه زمان
-  با ۴۰۰ ردیف، و «بدون تغییر داده، هیچ گره‌ای ساخته نمی‌شود» (MutationObserver).
-  روی کد قبلی ۱۶ از ۲۷ بررسی شکست می‌خورد.
+  با ۴۰۰ ردیف، «بدون تغییر داده، هیچ گره‌ای ساخته نمی‌شود» (MutationObserver) و خواندن شماره رتبه با
+  ترتیب دیده‌شده در حین هاور.
+  روی کد قبلی ۱۶ از ۲۸ بررسی شکست می‌خورد.
 - `tests/ui_home_click_test.cjs`: ۱۸ بررسی برای صفحه خانه؛ روی کد قبلی ۱۳ بررسی شکست می‌خورد.
 - **ابزار:** فقط jsdom ۲۶ در این محیط هست (Playwright/Chromium نصب نیست). jsdom نه چیدمان دارد نه
   hit-testing، پس «هدف کلیک» را با هویت گره شبیه‌سازی می‌کنیم و زمان واقعی کلیک، جابه‌جایی چیدمان،

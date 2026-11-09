@@ -224,7 +224,7 @@ node tests/sort_order_test.cjs                     # ok
 ### وضعیت تست در پایان این مرحله
 - `pytest`: **۳۱۸ سبز**.
 - jsdom: `ui_smoke`، `ui_dashboard_smoke`، `ui_controls_smoke`، `ui_classic_smoke`، `ui_home_smoke`،
-  `ui_fees_smoke`، `sort_order_test`، و دو تست تازه `ui_click_test` (۲۷/۲۷) و `ui_home_click_test`
-  (۱۸/۱۸) — همه سبز. روی کد قبل از رفع: ۱۶/۲۷ و ۱۳/۱۸.
+  `ui_fees_smoke`، `sort_order_test`، و دو تست تازه `ui_click_test` (۲۸/۲۸) و `ui_home_click_test`
+  (۱۸/۱۸) — همه سبز. روی کد قبل از رفع: ۱۶/۲۸ و ۱۳/۱۸.
 - **تأیید نشده:** چیدمان و hit-testing واقعی، زمان‌بندی کلیک، لمس، و ظاهر واقعی؛ ابزار این محیط
   jsdom است و Playwright/Chromium نصب نیست. این موارد باید روی لپ‌تاپ با کروم دیده شوند.

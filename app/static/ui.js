@@ -740,18 +740,36 @@
     const wasProfit = App.state.prevProfit;
     const flashed = new Set(Sort.newlyProfitable(visible, wasProfit));
     const els = App.state.rowEls;
+    // While the pointer is on the table the list may not be reordered under it (the row
+    // under the cursor would change identity), so the rank shown is the position the row
+    // really has right now — never a number that contradicts the visible order.
+    const deferOrder = App.isHovering() || !!App.state.press;
+    App.state.deferredOrder = deferOrder;
+    const rank = new Map();
+    if (deferOrder) {
+      Array.from(tbody.children).forEach(function (node, position) {
+        rank.set(node.dataset.key, position);
+      });
+      let next = tbody.children.length;
+      visible.forEach(function (row) {
+        if (rank.has(row.key)) return;
+        rank.set(row.key, next);
+        next += 1;
+      });
+    }
 
     visible.forEach(function (row, index) {
+      const shown = deferOrder ? rank.get(row.key) : index;
       let node = els.get(row.key);
       if (!node) {
         node = document.createElement('tr');
         node.className = 'row-open';
         node.dataset.key = row.key;
         node.setAttribute('tabindex', '0');
-        App.fillRow(node, row, index, maxAbs);
+        App.fillRow(node, row, shown, maxAbs);
         els.set(row.key, node);
       } else {
-        App.patchRow(node, row, index, maxAbs);
+        App.patchRow(node, row, shown, maxAbs);
       }
     });
     // Rows that dropped out of the list (filter, cap) are the only ones removed.
@@ -763,7 +781,7 @@
     });
     // Reordering moves the pointer to another opportunity under the cursor, so it waits
     // until the pointer has left the table (or nothing is pressed).
-    if (sorted && !App.isHovering() && !App.state.press) {
+    if (sorted && !deferOrder) {
       visible.forEach(function (row, index) {
         const node = els.get(row.key);
         const current = tbody.children[index];
@@ -1333,6 +1351,12 @@
     tbody.addEventListener('mouseleave', function () {
       App.state.hover = false;
       App.flushPending();   // the pointer left: apply the data that was held back
+      // ... and let the list take its real order now that nothing is under the cursor
+      if (App.state.data && App.state.deferredOrder) {
+        App.state.deferredOrder = false;
+        App.state.tableSig = null;
+        App.renderTable(false);
+      }
     });
     window.addEventListener('resize', function () { App.hideHelp(); });
   };
